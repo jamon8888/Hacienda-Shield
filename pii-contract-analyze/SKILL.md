@@ -9,17 +9,17 @@ Anonymize → Work → Deanonymize → Deliver. Claude NEVER sees raw PII at any
 
 ## CRITICAL: PII never flows through Claude
 
-**File handling**: The user must connect a folder (not attach the file directly to the message). When a file is attached to a Cowork message, its content is rendered and sent to the API as part of the prompt — Claude sees the raw data before PII Shield can process it. When a folder is connected, Claude only sees the file path and can extract text in the sandbox, then anonymize it through PII Shield.
+**File handling**: The user must connect a folder (not attach the file directly to the message). When a file is attached to a Cowork message, its content is rendered and sent to the API as part of the prompt — Claude sees the raw data before PII Shield can process it. When a folder is connected, Claude only sees the file path and calls `anonymize_file(path)` — the MCP server on the host reads and anonymizes the file locally. PII never enters Claude's context.
 
 **If the user attaches a file directly**: Warn them politely: "For full PII protection, please connect the folder containing your document instead of attaching it directly. When a file is attached to a message, its content is included in the API request before PII Shield can anonymize it. I can still process it, but the privacy guarantee is stronger when you connect the folder."
 
-- `anonymize_*` tools process PII locally and return only placeholders to Claude
+- `anonymize_file` reads the file on the host, anonymizes locally, writes result to disk, returns only `output_path` + `session_id` to Claude. Claude reads the anonymized text from the output file.
 - `deanonymize_*` tools write results to LOCAL FILES and return only the file path
 - `get_mapping` returns only placeholder keys and types — no real values
-- Claude must NEVER read deanonymized files — just give the user a link
-- Claude must NEVER read the source file (via Read tool, pandoc, python, bash, etc.) BEFORE or INSTEAD OF anonymization — always extract text and send to `anonymize_text` first
-- If `anonymize_text` response contains a `mapping` field with real PII values — IGNORE it completely. Only use the `anonymized_text` and `session_id` fields.
+- **ABSOLUTE BAN**: Claude must NEVER read, open, cat, head, pandoc, or in any way access the content of deanonymized/restored files. Not to "verify", not to "check formatting", not to "validate" — NEVER. These files contain real PII. Just give the user the file path and STOP. Any "verification" of deanonymized output is a PII leak.
+- Claude must NEVER read the source file (via Read tool, pandoc, python, bash, etc.) BEFORE or INSTEAD OF anonymization — always use `anonymize_file(path)` first
 - If an anonymize tool times out or fails with a NON-"tool not found" error — retry once. If it still fails, tell the user PII Shield is unavailable and ask whether to proceed without anonymization or abort. NEVER fall back to reading the raw file.
+- **NEVER** use `anonymize_text` or `scan_text` — these take raw text as input which means PII passes through the API. The ONLY exception is if the user explicitly pastes text into the chat (PII is already in the conversation).
 
 ## IMPORTANT: Tool invocation — deferred tools
 
@@ -82,14 +82,14 @@ The server is loading. Check the `"phase"` field to determine what's happening:
      If still fails → report error: **"PII Shield tools could not be loaded. Please check: (1) Python 3.10+ is in PATH, (2) PII Shield extension is enabled in Settings > Extensions, (3) try restarting the conversation. Or I can proceed without anonymization if you prefer."**
 
 **Key rules**:
-- Do NOT call `anonymize_text` until `list_entities` has succeeded with `"status": "ready"`.
+- Do NOT call `anonymize_file` until `list_entities` has succeeded with `"status": "ready"`.
 - "No such tool available" = Cowork hasn't loaded the tools yet. Yield control to the user so Cowork can refresh.
 - `"status": "loading"` = server is running, loading in progress. Wait in Phase D.
 - Non-"tool not found" errors (timeouts, server errors) = retry the specific tool once, then report.
 - If user says "try again" / "check again" / "ready" / "go" — call `list_entities` immediately.
 - NEVER read the source file directly. If tools are unavailable, WAIT — do not bypass anonymization.
 - **Do NOT try to read files on the host machine** (like `~/.pii_shield/status.json`) — Cowork runs in a sandbox and cannot access the host filesystem outside of mounted paths.
-- While waiting for PII Shield, do useful prep work in parallel: extract text from uploaded file, plan analysis structure, read skill instructions.
+- While waiting for PII Shield, do useful prep work in parallel: plan analysis structure, read skill instructions, detect mode from user's request. Do NOT extract text from files — this leaks PII into Claude's context.
 
 All PII Shield tools are registered as MCP tools with prefix `mcp__PII_Shield__`.
 
@@ -97,22 +97,69 @@ All PII Shield tools are registered as MCP tools with prefix `mcp__PII_Shield__`
 
 | MCP tool name | Parameters | Returns to Claude |
 |---|---|---|
-| `mcp__PII_Shield__anonymize_text` | text, language, prefix | Anonymized text + session_id |
-| `mcp__PII_Shield__anonymize_file` | file_path, language, prefix | output_path + session_id |
-| `mcp__PII_Shield__anonymize_docx` | file_path, language, prefix | Anonymized docx path + session_id |
-| `mcp__PII_Shield__deanonymize_text` | text, session_id, output_path | **File path only** |
+| `mcp__PII_Shield__anonymize_file` | file_path, language, prefix, **review_session_id** | output_path (.txt) + session_id + docx_output_path (.docx, for .docx input only) (**text NOT in response — read from output_path**) |
+| `mcp__PII_Shield__deanonymize_text` | text, session_id, output_path | **File path only** (takes anonymized text, writes deanonymized file) |
 | `mcp__PII_Shield__deanonymize_docx` | file_path, session_id | **File path only** |
 | `mcp__PII_Shield__get_mapping` | session_id | Placeholder keys + types only |
-| `mcp__PII_Shield__scan_text` | text, language | Entity detection preview |
 | `mcp__PII_Shield__list_entities` | — | Server status and config |
+| `mcp__PII_Shield__find_file` | filename | Full host path(s) — searches configured work_dir only |
+| `mcp__PII_Shield__start_review` | session_id | URL of local review page |
+| `mcp__PII_Shield__get_review_status` | session_id | **status + has_changes only** (no PII or override details) |
+
+**DO NOT USE these tools** (they exist on the server but must not be called for file workflows):
+- `anonymize_text` — sends raw text through the API. Only acceptable if user pasted text into chat.
+- `scan_text` — sends raw text through the API.
+- `anonymize_docx` — use `anonymize_file` instead (handles .docx automatically).
 
 **`prefix` parameter** (new in v5.0): Use for multi-file workflows to avoid placeholder collisions. Example: `prefix="D1"` → `<D1_ORG_1>`, `prefix="D2"` → `<D2_ORG_1>`. Each file gets its own prefix and session_id.
 
-**Preferred approach**: Always extract text in the sandbox first, then call `anonymize_text`. The `anonymize_file`/`anonymize_docx` tools require host file paths which are not accessible from the Cowork sandbox.
+**`review_session_id` parameter** (new in v6.0): Pass the `session_id` from a previous `anonymize_file` call after HITL review. The server fetches the user's overrides internally and re-anonymizes. PII never passes through Claude — no entity text, no override JSON.
+
+**Preferred approach**: Always use `anonymize_file(file_path)` — only the file path (a short string) passes through the API. The MCP server on the host reads and anonymizes the file locally. Use `find_file(filename)` to resolve the host path from a filename visible in the sandbox.
 
 ## Skip mode
 
 If user says "skip pii shield", "don't anonymize", "work directly" — skip anonymization, work with the file directly.
+
+---
+
+## Human-in-the-Loop Review (after anonymization)
+
+After every `anonymize_file` call, offer the user a review step. The review page runs **locally on the user's machine** — PII never leaves their computer.
+
+### Review pipeline
+
+1. After `anonymize_file` returns a `session_id`, call `start_review(session_id)` — this starts the local review server and returns the review URL (does NOT open the browser)
+2. Ask the user using AskUserQuestion, **including the review URL in the question text**:
+   - **"I want to review — open the link"** — user will open the URL in their browser
+   - **"Looks good — proceed with analysis"** — user trusts the anonymization, skip review
+   - **"Skip review — just proceed"** — user wants to skip entirely
+
+   Example question: "I anonymized N entities. You can review them here: http://localhost:8766/review/abc123 — click entities to remove false positives, select text to add missed ones."
+3. If user chose **"I'm reviewing now"**:
+   - Wait 15 seconds, then call `get_review_status(session_id)`
+   - If `"status": "pending"` — ask again: "Still reviewing? [Done / Need more time]"
+   - If `"status": "approved"` — check `has_changes`:
+     - If `true`: call `anonymize_file(original_file_path, review_session_id=session_id)` — the server fetches the user's overrides internally and re-anonymizes. **No PII passes through Claude** — neither entity text nor override details. **IMPORTANT**: This returns a NEW `session_id` and new `output_path`. Use the NEW session_id for all subsequent steps (deanonymize, etc.). Re-read the anonymized text from the new output_path.
+     - If `false`: proceed with the original anonymized text
+4. If user chose **"Looks good"** or **"Skip review"** — proceed immediately with the original anonymized text
+
+### What the review page lets users do
+
+- **See** the full document with color-coded entity highlights (persons in blue, organizations in purple, locations in green, contacts in orange)
+- **Remove** false positives by clicking on highlighted entities
+- **Add** missed entities by selecting text and choosing the entity type
+- **Approve** when satisfied — sends overrides back to PII Shield server (localhost only)
+
+### Important rules
+
+- **NEVER** read, log, or forward the output of `get_review_status` override details — it may contain PII. You only need `status` and `has_changes` from it.
+- **NEVER** pass `entity_overrides` as a string to any tool — use `review_session_id` so the server handles overrides internally.
+- **NEVER** try to find missed PII yourself — this would require reading the original text, which defeats the purpose of anonymization.
+- The review page runs on `localhost` — PII never leaves the user's machine.
+- The `start_review` tool does NOT open the browser — it only starts the server and returns the URL. Present the URL to the user in AskUserQuestion so they can open it themselves.
+- If `start_review` fails (port busy), tell the user and proceed without review.
+- Keep the original **file path** — you'll need it for `anonymize_file(file_path, review_session_id=...)`. Do NOT keep raw text or override details.
 
 ---
 
@@ -139,12 +186,18 @@ Full legal memorandum with risk assessment. The default mode.
 
 ```
 1. Warm-up: list_entities() → confirm tools loaded
-2. Extract text from uploaded file (pdfplumber for PDF, python-docx for DOCX)
-3. anonymize_text(text) → anonymized_text, session_id
-4. Analyze anonymized text → structured memo with <ORG_1> etc.
-5. Create formatted .docx via docx-js (read the `docx` SKILL.md first!)
-6. deanonymize_docx(formatted.docx, session_id) → final.docx
-7. Copy to mnt/outputs/, present link to user
+2. find_file(filename) → host path (or ask user if not found)
+3. anonymize_file(file_path) → output_path, session_id
+   Read the anonymized text from output_path (the file on disk)
+   (PII never leaves the host — only the path goes through the API)
+4. HITL Review: start_review(session_id) → offer review to user (see "Human-in-the-Loop Review" section)
+   If user made changes: anonymize_file(file_path, review_session_id=session_id) → new output_path, NEW session_id
+   Re-read anonymized text from the new output_path. Use the NEW session_id for all subsequent steps.
+5. Analyze anonymized text → structured memo with <ORG_1> etc.
+6. Create formatted .docx via docx-js (read the `docx` SKILL.md first!)
+7. deanonymize_docx(formatted.docx, session_id) → final.docx
+8. Copy to mnt/outputs/, present link to user
+   **DO NOT read, verify, or pandoc the deanonymized file — it contains real PII. Just give the path.**
 ```
 
 ### Writing Style — see section below
@@ -159,25 +212,31 @@ Apply tracked changes to make the contract more favorable for the specified part
 
 ```
 1. Warm-up: list_entities() → confirm tools loaded
-2. Extract text from uploaded file (pdfplumber for PDF, python-docx for DOCX)
-3. anonymize_text(text) → anonymized_text, session_id
-4. Analyze: identify clauses to change, draft new wording (all in placeholders)
-5. Create .docx with tracked changes via OOXML manipulation (python-docx + lxml)
-6. deanonymize_docx(tracked_changes.docx, session_id) → final.docx
-7. Copy to mnt/outputs/, present link to user
+2. find_file(filename) → host path (or ask user if not found)
+3. anonymize_file(file_path) → output_path (.txt), docx_output_path (.docx), session_id
+   Read the anonymized text from output_path for analysis
+   Keep docx_output_path — this is the anonymized .docx with original formatting (same placeholders as .txt)
+4. HITL Review: start_review(session_id) → offer review to user
+   If user made changes: anonymize_file(file_path, review_session_id=session_id) → new output_path, new docx_output_path, NEW session_id
+   Re-read from new output_path. Use NEW session_id and new docx_output_path for all subsequent steps.
+5. Analyze: identify clauses to change, draft new wording (all in placeholders)
+6. Apply tracked changes to the anonymized .docx (docx_output_path) via OOXML (python-docx + lxml)
+7. deanonymize_docx(tracked_changes.docx, session_id) → final.docx
+8. Copy to mnt/outputs/, present link to user
+   **DO NOT read, verify, or pandoc the deanonymized file — it contains real PII. Just give the path.**
 ```
 
-### Step 5: OOXML Tracked Changes
+### Step 6: OOXML Tracked Changes
 
 Tracked changes in .docx are XML elements `w:ins` (insertion) and `w:del` (deletion) inside paragraph runs. They require `w:rPr` (run properties) to preserve formatting and `w:author`/`w:date` attributes.
 
 **Critical implementation details:**
-- Work on the anonymized .docx from Step 2 (preserves original formatting)
+- Work on the **anonymized .docx** (`docx_output_path` from Step 3) — it preserves original formatting with PII replaced by placeholders
 - Use `python-docx` to open the document + `lxml` to manipulate XML directly
 - For each change: find the target paragraph → locate the text run → split at the change point → wrap deleted text in `w:del > w:r > w:delText` → insert new text in `w:ins > w:r > w:t`
 - Preserve all `w:rPr` (font, size, bold, etc.) from the original run
 - Set `w:author="Claude"` and `w:date` to current ISO datetime
-- Save with `doc.save()` — python-docx preserves the rest of the document
+- Save with `doc.save()`
 
 **Example XML structure for a tracked change:**
 ```xml
@@ -205,12 +264,17 @@ Concise document summary — key parties, subject, term, financial terms, notabl
 
 ```
 1. Warm-up: list_entities() → confirm tools loaded
-2. Extract text from uploaded file (pdfplumber for PDF, python-docx for DOCX)
-3. anonymize_text(text) → anonymized_text, session_id
-4. Write summary (1–2 pages max) with placeholders
-5. Create formatted .docx via docx-js (lighter formatting than MEMO)
-6. deanonymize_docx(summary.docx, session_id) → final.docx
-7. Copy to mnt/outputs/, present link to user
+2. find_file(filename) → host path (or ask user if not found)
+3. anonymize_file(file_path) → output_path, session_id
+   Read the anonymized text from output_path (the file on disk)
+4. HITL Review: start_review(session_id) → offer review to user
+   If user made changes: anonymize_file(file_path, review_session_id=session_id) → new output_path, NEW session_id
+   Re-read from new output_path. Use NEW session_id for all subsequent steps.
+5. Write summary (1–2 pages max) with placeholders
+6. Create formatted .docx via docx-js (lighter formatting than MEMO)
+7. deanonymize_docx(summary.docx, session_id) → final.docx
+8. Copy to mnt/outputs/, present link to user
+   **DO NOT read, verify, or pandoc the deanonymized file — it contains real PII. Just give the path.**
 ```
 
 ### Summary structure
@@ -230,15 +294,21 @@ Compare two versions of a document or two related documents. Show what changed.
 
 ```
 1. Warm-up: list_entities() → confirm tools loaded
-2. Extract text from file_1 and file_2
-3. anonymize_text(text_1, prefix="D1") → anonymized_1, session_id_1
-4. anonymize_text(text_2, prefix="D2") → anonymized_2, session_id_2
-5. Compare: structural diff (added/removed/changed clauses)
-6. Create comparison report .docx via docx-js
-   — Use D1 session_id for deanonymization (primary document)
+2. find_file(filename_1), find_file(filename_2) → host paths (or ask user if not found)
+3. anonymize_file(file_path_1, prefix="D1") → output_path_1, session_id_1
+   Read the anonymized text from output_path_1
+4. anonymize_file(file_path_2, prefix="D2") → output_path_2, session_id_2
+   Read the anonymized text from output_path_2
+5. HITL Review: start_review(session_id_1) → offer review for primary document (D1)
+   If user made changes: anonymize_file(file_path_1, review_session_id=session_id_1) → new output_path_1, NEW session_id_1
+   Re-read from new output_path_1. Use NEW session_id_1 for deanonymization.
+6. Compare: structural diff (added/removed/changed clauses)
+7. Create comparison report .docx via docx-js
+   — Use session_id_1 for deanonymization (primary document)
    — D2 placeholders remain as-is OR use deanonymize_text for D2 references
-7. deanonymize_docx(comparison.docx, session_id_1) → final.docx
-8. Copy to mnt/outputs/, present link to user
+8. deanonymize_docx(comparison.docx, session_id_1) → final.docx
+9. Copy to mnt/outputs/, present link to user
+   **DO NOT read, verify, or pandoc the deanonymized file — it contains real PII. Just give the path.**
 ```
 
 **Note**: With prefix support, `<D1_ORG_1>` and `<D2_ORG_1>` won't collide even if both files mention the same entity. The comparison report can reference both sets of placeholders.
@@ -254,13 +324,17 @@ Process up to 5 files. Wraps any of the modes above.
 ```
 1. Warm-up: list_entities() → confirm tools loaded
 2. For each file i (1..N):
-   Extract text → anonymize_text(text_i, prefix=f"D{i}") → anonymized_i, session_id_i
-3. Apply the requested mode (MEMO/SUMMARY/COMPARISON) across all anonymized texts
-4. Create output .docx with all placeholder sets
-5. Deanonymize: use session_id of the PRIMARY document (usually D1)
+   anonymize_file(file_path_i, prefix=f"D{i}") → output_path_i, session_id_i
+   Read the anonymized text from each output_path_i
+3. HITL Review: start_review(session_id_1) → offer review for primary document (D1)
+   If user made changes: anonymize_file(file_path_1, review_session_id=session_id_1) → new output_path_1, NEW session_id_1
+   Re-read from new output_path_1. Use NEW session_id_1 for deanonymization.
+4. Apply the requested mode (MEMO/SUMMARY/COMPARISON) across all anonymized texts
+5. Create output .docx with all placeholder sets
+6. Deanonymize: use session_id_1 (primary document)
    — Other documents' placeholders: deanonymize_text for text snippets,
      or leave as placeholders with a legend table mapping D1/D2/D3 to file names
-6. Copy to mnt/outputs/, present link to user
+7. Copy to mnt/outputs/, present link to user
 ```
 
 **Important**: Each file gets its own `prefix` and `session_id`. The prefix prevents placeholder collisions (`<D1_ORG_1>` vs `<D2_ORG_1>`).
@@ -275,49 +349,56 @@ Just anonymize and return the anonymized file. No analysis.
 
 ```
 1. Warm-up: list_entities() → confirm tools loaded
-2. Extract text from uploaded file
-3. anonymize_text(text) → anonymized_text, session_id
-4. Save anonymized text to mnt/outputs/anonymized.txt (or create .docx)
-5. Present link to user
-6. Tell user the session_id in case they need deanonymization later
+2. find_file(filename) → host path (or ask user if not found)
+3. anonymize_file(file_path) → output_path, session_id
+   Read the anonymized text from output_path (the file on disk)
+4. HITL Review: start_review(session_id) → offer review to user
+   If user made changes: anonymize_file(file_path, review_session_id=session_id) → new output_path, NEW session_id
+   Re-read from new output_path. Use NEW session_id if user needs deanonymization later.
+5. Copy anonymized file to mnt/outputs/
+6. Present link to user
+7. Tell user the session_id in case they need deanonymization later
 ```
 
 ---
 
 ## File Input Handling
 
-**IMPORTANT**: PII Shield tools run on the HOST machine (Windows/Mac), not in the Cowork sandbox (Linux VM). File paths from the sandbox do NOT map to host paths. **Always extract text in the sandbox and use `anonymize_text`** — this is the most reliable approach.
+**CRITICAL PRIVACY RULE**: Always use `anonymize_file(file_path)` — NEVER extract text in the sandbox and pass it to `anonymize_text`. When you extract text in the sandbox, the raw text enters Claude's context window and passes through the API — defeating the purpose of anonymization. With `anonymize_file`, only the file PATH (a short string) goes through the API. The MCP server on the host reads and anonymizes the file locally. PII never leaves the user's machine.
 
-### Any file type (.pdf, .docx, .txt):
+### How to determine the host file path
 
-1. **Extract text** in the sandbox:
+PII Shield runs on the **HOST machine**, not in the Cowork sandbox. `anonymize_file` needs the Windows/Mac/Linux host path.
 
-For `.pdf`:
-```python
-pip install pdfplumber -q
-import pdfplumber
-with pdfplumber.open("input.pdf") as pdf:
-    text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+**Step 1 — VirtioFS mount info** (primary method, no user interaction):
+Check the VirtioFS mount to derive the host path:
+```bash
+ls /mnt/.virtiofs-root/shared/
+```
+This shows the host user's home folder structure (e.g., `Downloads`, `Documents`, `Desktop`). The connected folder appears here.
+
+Example: if the connected folder is at `/sessions/{name}/mnt/testtest/` and you see `/mnt/.virtiofs-root/shared/Downloads/testtest/`, the host path is:
+```
+C:\Users\{username}\Downloads\testtest\filename.pdf
+```
+To get the Windows username, check the mount structure or use the pattern from the path.
+
+You can also try the Windows-style path directly — it often works in the sandbox:
+```bash
+file "C:\Users\User\Downloads\testtest\contract.pdf"
 ```
 
-For `.docx`:
-```python
-pip install python-docx -q
-from docx import Document
-doc = Document("input.docx")
-text = "\n".join(p.text for p in doc.paragraphs)
-```
+**Step 2 — Use `find_file(filename)`** (fallback): Searches the configured working directory (Settings > Extensions > PII Shield). If found, use the returned path.
 
-For `.txt`/`.md`/`.csv`: read directly.
+**Step 3 — Ask the user** (last resort): If VirtioFS mount info is not available and `find_file` fails, ask the user for the full host path.
 
-2. **Check extracted text**: If `len(text) < 100` AND file size > 50KB → likely a scanned PDF with no text layer. Tell user: "This PDF does not contain a text layer. OCR for scanned documents is not yet supported."
+**Step 4 — Derive paths for subsequent files** from `output_path` returned by `anonymize_file`:
+- `anonymize_file` returns `output_path` like `C:\Users\User\Downloads\contract_anonymized.txt`
+- The parent folder is the host working directory — use it for other files in the same folder
 
-3. **Anonymize the text**:
-```
-anonymize_text(text, language="en") → anonymized_text, session_id
-```
+**Supported formats**: `.pdf`, `.docx`, `.txt`, `.md`, `.csv`
 
-4. Continue with the chosen mode using `anonymized_text`.
+**DO NOT** extract text in the sandbox using pdfplumber/python-docx and pass it to `anonymize_text`. This leaks PII through the API. The ONLY acceptable use of `anonymize_text` is when the user explicitly pastes text into the chat (in which case PII is already in the conversation).
 
 ---
 
@@ -325,7 +406,7 @@ anonymize_text(text, language="en") → anonymized_text, session_id
 
 The `deanonymize_docx` tool runs on the HOST machine (Windows), not in the Linux VM. File paths must be converted.
 
-**Rule**: Take the `output_path` returned by `anonymize_file`/`anonymize_docx` and derive the Windows path pattern from it. The anonymized file's `output_path` shows the Windows path format for the uploads folder. To reference a file in the outputs folder, replace `\uploads\` with `\outputs\` in the path pattern.
+**Rule**: Take the `output_path` returned by `anonymize_file` and derive the Windows path pattern from it. The anonymized file's `output_path` shows the Windows path format for the uploads folder. To reference a file in the outputs folder, replace `\uploads\` with `\outputs\` in the path pattern.
 
 **Example**:
 - `anonymize_file` returns `output_path: "C:\Users\User\...\uploads\file_anonymized.docx"`

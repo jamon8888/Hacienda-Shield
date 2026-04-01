@@ -1,5 +1,5 @@
 """
-PII Shield MCP Server v5.4.0
+PII Shield MCP Server v6.0.0
 ==============================
 Cowork-only. NER-only mode (no LLM dependency).
   - NER backend: Presidio TransformersNlpEngine (dslim/bert-base-NER) with SpaCy tokenization
@@ -262,7 +262,7 @@ except Exception:
     pass  # will retry in save_mapping; in-memory fallback always works
 
 SUPPORTED_ENTITIES = [
-    "PERSON", "ORGANIZATION", "LOCATION", "DATE_TIME", "NRP",
+    "PERSON", "ORGANIZATION", "LOCATION", "NRP",
     "EMAIL_ADDRESS", "PHONE_NUMBER", "URL", "IP_ADDRESS",
     "CREDIT_CARD", "IBAN_CODE", "CRYPTO",
     "US_SSN", "US_PASSPORT", "US_DRIVER_LICENSE",
@@ -278,7 +278,7 @@ SUPPORTED_ENTITIES = [
 
 TAG_NAMES = {
     "PERSON": "PERSON", "ORGANIZATION": "ORG", "LOCATION": "LOCATION",
-    "DATE_TIME": "DATE", "NRP": "NRP",
+    "NRP": "NRP",
     "EMAIL_ADDRESS": "EMAIL", "PHONE_NUMBER": "PHONE", "URL": "URL",
     "IP_ADDRESS": "IP", "CREDIT_CARD": "CREDIT_CARD", "IBAN_CODE": "IBAN",
     "CRYPTO": "CRYPTO",
@@ -347,6 +347,39 @@ def cleanup_old_mappings():
         log.info(f"Cleaned up {removed} expired mappings (>{MAPPING_TTL_DAYS} days)")
 
 
+def _save_review_to_disk(session_id, review_data):
+    """Persist review data to disk so other server processes can access it."""
+    try:
+        path = MAPPING_DIR / f"review_{session_id}.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(review_data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:
+        log.warning(f"_save_review_to_disk failed (in-memory OK): {e}")
+
+
+def _load_review_from_disk(session_id):
+    """Load review data from disk (cross-process fallback)."""
+    try:
+        path = MAPPING_DIR / f"review_{session_id}.json"
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            # Cache in memory for fast subsequent access
+            _in_memory_mappings[f"review:{session_id}"] = data
+            return data
+    except Exception as e:
+        log.warning(f"_load_review_from_disk failed: {e}")
+    return None
+
+
+def _get_review(session_id):
+    """Get review data: memory first, then disk."""
+    review_key = f"review:{session_id}"
+    if review_key in _in_memory_mappings:
+        return _in_memory_mappings[review_key]
+    return _load_review_from_disk(session_id)
+
+
 # ============================================================
 # PIIEngine
 # ============================================================
@@ -359,7 +392,7 @@ class PIIEngine:
             cls._instance._initialized = False
         return cls._instance
 
-    GLINER_MODEL_NAME = os.environ.get("PII_GLINER_MODEL", "urchade/gliner_large-v2.1")
+    GLINER_MODEL_NAME = os.environ.get("PII_GLINER_MODEL", _GLINER_MODEL)
 
     def _ensure_ready(self, _from_bootstrap=False):
         """Initialize the PII engine. Called from bootstrap thread after packages/models are ready,
@@ -405,7 +438,9 @@ class PIIEngine:
         from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
         registry = RecognizerRegistry()
         registry.load_predefined_recognizers()
-        log.info(f"Loaded {len(registry.recognizers)} predefined recognizers")
+        # Remove DateRecognizer — too aggressive on legal docs (catches "30 days", section numbers, years)
+        registry.recognizers = [r for r in registry.recognizers if type(r).__name__ != "DateRecognizer"]
+        log.info(f"Loaded {len(registry.recognizers)} predefined recognizers (DateRecognizer removed)")
 
         # --- Try GLiNER (zero-shot NER), fallback to SpaCy-only ---
         backend_used = "spacy (en_core_web_sm) [FALLBACK]"
@@ -773,11 +808,69 @@ class PIIEngine:
 
         return mapping
 
+    # --- Apply user overrides (HITL review) ---
+    def _apply_overrides(self, confirmed, text, overrides_json):
+        """Apply user corrections from HITL review: remove false positives, add missed entities.
+        Removes/adds apply to ALL occurrences of the same text+type, not just the clicked one."""
+        try:
+            overrides = json.loads(overrides_json) if isinstance(overrides_json, str) else overrides_json
+        except (json.JSONDecodeError, TypeError):
+            return confirmed
+
+        # Remove false positives: by index AND all matching text+type
+        if "remove" in overrides and overrides["remove"]:
+            remove_set = set(overrides["remove"])
+            # Collect normalized text+type of removed entities
+            removed_signatures = set()
+            for i, e in enumerate(confirmed):
+                if i in remove_set:
+                    removed_signatures.add((e["type"], e["text"].strip().lower()))
+            # Remove by index OR by matching text+type (catches all occurrences)
+            confirmed = [e for i, e in enumerate(confirmed)
+                         if i not in remove_set
+                         and (e["type"], e["text"].strip().lower()) not in removed_signatures]
+
+        # Add user-specified entities: find ALL occurrences in text
+        if "add" in overrides and overrides["add"]:
+            for addition in overrides["add"]:
+                add_text = addition.get("text", "")
+                add_type = addition.get("type", "PERSON")
+                if not add_text:
+                    continue
+                # Find every occurrence of this text in the document
+                search_start = 0
+                while True:
+                    pos = text.find(add_text, search_start)
+                    if pos < 0:
+                        break
+                    # Skip if already covered by an existing entity
+                    already_covered = any(
+                        e["start"] <= pos and pos + len(add_text) <= e["end"]
+                        for e in confirmed
+                    )
+                    if not already_covered:
+                        confirmed.append({
+                            "type": add_type,
+                            "text": add_text,
+                            "start": pos,
+                            "end": pos + len(add_text),
+                            "score": 1.0,
+                            "verified": True,
+                            "reason": "user_added",
+                        })
+                    search_start = pos + len(add_text)
+
+        return sorted(confirmed, key=lambda x: x["start"])
+
     # --- Text anonymization ---
-    def anonymize_text(self, text, language="en", prefix=""):
+    def anonymize_text(self, text, language="en", prefix="", entity_overrides=""):
         t0 = time.time()
         entities = self.detect(text, language)
         confirmed = [e for e in entities if e.get("verified")]
+
+        # Apply HITL overrides if provided
+        if entity_overrides:
+            confirmed = self._apply_overrides(confirmed, text, entity_overrides)
 
         mapping = self._assign_placeholders(confirmed, prefix)
 
@@ -802,6 +895,20 @@ class PIIEngine:
                 "verified": e["verified"],
                 "reason": e.get("reason", ""),
             })
+
+        # Store review data for potential HITL review (memory + disk for cross-process access)
+        review_data = {
+            "original_text": text,
+            "entities": [{"type": e["type"], "text": e["text"], "start": e["start"],
+                          "end": e["end"], "score": e["score"], "verified": e.get("verified", False)}
+                         for e in entities],
+            "confirmed": [i for i, e in enumerate(entities) if e.get("verified")],
+            "status": "pending",
+            "overrides": {"remove": [], "add": []},
+            "timestamp": time.time(),
+        }
+        _in_memory_mappings[f"review:{session_id}"] = review_data
+        _save_review_to_disk(session_id, review_data)
 
         return {
             "anonymized_text": anonymized, "session_id": session_id,
@@ -855,6 +962,27 @@ class PIIEngine:
             "processing_time_ms": round((time.time() - t0) * 1000, 1),
         }
 
+    # --- Apply existing mapping to docx (for re-anonymization with HITL overrides) ---
+    def anonymize_docx_with_mapping(self, docx_path, mapping):
+        """Apply a known placeholder mapping to a .docx via find-replace. No NER detection.
+        Searches ALL w:t elements including inside w:ins/w:del (tracked changes)."""
+        from docx import Document
+        doc = Document(str(docx_path))
+        # Reverse: {placeholder: real_text} → {real_text: placeholder}, longest first
+        reverse_map = {v: k for k, v in mapping.items()}
+        sorted_texts = sorted(reverse_map.keys(), key=len, reverse=True)
+        _nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        for para in self._iter_docx_paragraphs(doc):
+            for t_elem in para._element.findall('.//w:t', _nsmap):
+                text = t_elem.text or ""
+                for real_text in sorted_texts:
+                    if real_text in text:
+                        text = text.replace(real_text, reverse_map[real_text])
+                t_elem.text = text
+        out = Path(docx_path).parent / f"{Path(docx_path).stem}_anonymized.docx"
+        doc.save(str(out))
+        return str(out)
+
     # --- Deanonymization ---
     @staticmethod
     def deanonymize_text(text, mapping):
@@ -863,16 +991,19 @@ class PIIEngine:
         return text
 
     def deanonymize_docx(self, docx_path, mapping):
+        """Restore placeholders in .docx — searches ALL w:t elements including inside w:ins/w:del (tracked changes)."""
         from docx import Document
         doc = Document(str(docx_path))
         sorted_ph = sorted(mapping.keys(), key=len, reverse=True)
+        _nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
         for para in self._iter_docx_paragraphs(doc):
-            for run in para.runs:
-                t = run.text
+            # findall('.//w:t') catches ALL text elements: direct runs AND inside w:ins/w:del
+            for t_elem in para._element.findall('.//w:t', _nsmap):
+                text = t_elem.text or ""
                 for ph in sorted_ph:
-                    if ph in t:
-                        t = t.replace(ph, mapping[ph])
-                run.text = t
+                    if ph in text:
+                        text = text.replace(ph, mapping[ph])
+                t_elem.text = text
         out = Path(docx_path).parent / f"{Path(docx_path).stem}_restored.docx"
         doc.save(str(out))
         return str(out)
@@ -963,7 +1094,10 @@ engine = PIIEngine()
 def _latest_session_id():
     """Find the most recent session by mapping file mtime, with in-memory fallback."""
     try:
-        sessions = sorted(MAPPING_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        sessions = sorted(
+            (f for f in MAPPING_DIR.glob("*.json") if not f.name.startswith("review_")),
+            key=lambda p: p.stat().st_mtime, reverse=True
+        )
         if sessions:
             return json.loads(sessions[0].read_text(encoding="utf-8")).get("session_id", "")
     except Exception:
@@ -1000,39 +1134,138 @@ def _check_ready():
 
 
 @mcp.tool()
-def anonymize_text(text: str, language: str = "en", prefix: str = "") -> str:
+def anonymize_text(text: str, language: str = "en", prefix: str = "", entity_overrides: str = "") -> str:
     """Anonymize PII in text. Returns indexed placeholders + session_id for deanonymization.
-    Use prefix (e.g. "D1") for multi-file workflows to avoid placeholder collisions."""
+    Use prefix (e.g. "D1") for multi-file workflows to avoid placeholder collisions.
+    Use entity_overrides (JSON) from HITL review to add/remove entities."""
     loading = _check_ready()
     if loading:
         return loading
-    r = engine.anonymize_text(text, language, prefix=prefix)
+    r = engine.anonymize_text(text, language, prefix=prefix, entity_overrides=entity_overrides)
     return json.dumps(r, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
-def anonymize_file(file_path: str, language: str = "en", prefix: str = "") -> str:
-    """Anonymize PII in a file. Auto-detects format: .docx (preserves formatting), .txt/.md/.csv (plain text).
-    Use prefix (e.g. "D1") for multi-file workflows to avoid placeholder collisions."""
+def anonymize_file(file_path: str, language: str = "en", prefix: str = "", review_session_id: str = "") -> str:
+    """Anonymize PII in a file. Auto-detects format: .pdf, .docx (preserves formatting), .txt/.md/.csv (plain text).
+    Use prefix (e.g. "D1") for multi-file workflows to avoid placeholder collisions.
+    Use review_session_id to re-anonymize with HITL overrides — the server fetches overrides internally, PII never passes through the API.
+    PREFERRED over anonymize_text for privacy: only the file path passes through the API, not the content."""
     loading = _check_ready()
     if loading:
         return loading
     p = Path(file_path).expanduser().resolve()
     if not p.exists():
-        return json.dumps({"error": f"File not found: {p}"})
+        # Try work_dir + filename
+        work_dir = os.environ.get("PII_WORK_DIR", "").strip()
+        if work_dir:
+            candidate = Path(work_dir).expanduser().resolve() / p.name
+            if candidate.exists():
+                p = candidate
+        if not p.exists():
+            return json.dumps({"error": f"File not found: {p}",
+                               "hint": "Ask the user for the full host path to the file."})
 
-    if p.suffix.lower() == ".docx":
-        r = engine.anonymize_docx(p, language, prefix=prefix)
+    # Resolve HITL overrides from review session (stored on server, never sent to Claude)
+    entity_overrides = ""
+    if review_session_id:
+        review = _get_review(review_session_id.strip())
+        if review:
+            overrides = review.get("overrides", {})
+            if overrides.get("remove") or overrides.get("add"):
+                entity_overrides = json.dumps(overrides)
+        else:
+            return json.dumps({"error": f"Review session not found: {review_session_id}. Run anonymize_file + start_review first."})
+
+    if p.suffix.lower() == ".pdf":
+        # Extract text from PDF on the host machine
+        try:
+            import pdfplumber
+        except ImportError:
+            try:
+                import subprocess
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "pdfplumber", "-q"],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                import pdfplumber
+            except Exception as e:
+                return json.dumps({"error": f"Cannot install pdfplumber for PDF support: {e}"})
+        try:
+            with pdfplumber.open(str(p)) as pdf:
+                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        except Exception as e:
+            return json.dumps({"error": f"Failed to read PDF: {e}"})
+        if len(text.strip()) < 50:
+            return json.dumps({"error": "PDF has no extractable text layer. Scanned PDFs (OCR) are not yet supported.",
+                               "file": str(p)})
+        r = engine.anonymize_text(text, language, prefix=prefix, entity_overrides=entity_overrides)
+        out = p.parent / f"{p.stem}_anonymized.txt"
+        out.write_text(r["anonymized_text"], encoding="utf-8")
+        r.pop("anonymized_text", None)
+        r["output_path"] = str(out)
+        r["note"] = "Anonymized text written to output_path. Read the file to get the content."
+        return json.dumps(r, indent=2, ensure_ascii=False)
+    elif p.suffix.lower() == ".docx":
+        # Extract text → anonymize_text → .txt (readable by Claude + review data for HITL)
+        # Also produce anonymized .docx (preserves formatting for REDLINE mode)
+        try:
+            from docx import Document as _DocxDoc
+            _doc = _DocxDoc(str(p))
+            text = "\n".join(para.text for para in PIIEngine._iter_docx_paragraphs(_doc))
+        except Exception as e:
+            return json.dumps({"error": f"Failed to read docx: {e}"})
+        r = engine.anonymize_text(text, language, prefix=prefix, entity_overrides=entity_overrides)
+        # Write .txt for Claude to read
+        out_txt = p.parent / f"{p.stem}_anonymized.txt"
+        out_txt.write_text(r["anonymized_text"], encoding="utf-8")
+        r.pop("anonymized_text", None)
+        r["output_path"] = str(out_txt)
+        # Also produce anonymized .docx (same mapping as .txt — consistent placeholders)
+        try:
+            mapping = load_mapping(r["session_id"])
+            docx_out = engine.anonymize_docx_with_mapping(p, mapping)
+            r["docx_output_path"] = docx_out
+        except Exception as e:
+            log.warning(f"anonymize_docx failed (txt output OK): {e}")
+        r["note"] = "Anonymized text at output_path (.txt). For REDLINE, use docx_output_path (.docx with formatting)."
         return json.dumps(r, indent=2, ensure_ascii=False)
     elif p.suffix.lower() in (".txt", ".md", ".csv", ".log", ".text"):
         text = p.read_text(encoding="utf-8")
-        r = engine.anonymize_text(text, language, prefix=prefix)
+        r = engine.anonymize_text(text, language, prefix=prefix, entity_overrides=entity_overrides)
         out = p.parent / f"{p.stem}_anonymized{p.suffix}"
         out.write_text(r["anonymized_text"], encoding="utf-8")
+        r.pop("anonymized_text", None)
         r["output_path"] = str(out)
+        r["note"] = "Anonymized text written to output_path. Read the file to get the content."
         return json.dumps(r, indent=2, ensure_ascii=False)
     else:
-        return json.dumps({"error": f"Unsupported format: {p.suffix}. Supported: .docx .txt .md .csv"})
+        return json.dumps({"error": f"Unsupported format: {p.suffix}. Supported: .pdf .docx .txt .md .csv"})
+
+
+@mcp.tool()
+def find_file(filename: str) -> str:
+    """Find a file on the host machine by filename. Searches the configured work_dir (Settings > Extensions > PII Shield).
+    If work_dir is not set or file not found there, returns an error — ask the user for the path."""
+    work_dir = os.environ.get("PII_WORK_DIR", "").strip()
+    if not work_dir:
+        return json.dumps({"error": "Working directory not configured.",
+                           "hint": "Ask the user for the full file path, or ask them to set 'Working directory' in Settings > Extensions > PII Shield."})
+    wd = Path(work_dir).expanduser().resolve()
+    if not wd.exists():
+        return json.dumps({"error": f"Configured work_dir does not exist: {work_dir}",
+                           "hint": "Ask the user to fix 'Working directory' in Settings > Extensions > PII Shield."})
+    matches = []
+    try:
+        for f in wd.rglob(filename):
+            if f.is_file():
+                matches.append(str(f))
+                if len(matches) >= 10:
+                    break
+    except PermissionError:
+        pass
+    if matches:
+        return json.dumps({"matches": matches, "count": len(matches)})
+    return json.dumps({"error": f"File '{filename}' not found in work_dir: {work_dir}",
+                       "hint": "Ask the user for the full file path."})
 
 
 @mcp.tool()
@@ -1183,7 +1416,10 @@ def scan_text(text: str, language: str = "en") -> str:
 def list_entities() -> str:
     """Show status, supported types, and recent sessions."""
     # Always show recent sessions (no engine needed)
-    sessions = sorted(MAPPING_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]
+    sessions = sorted(
+        (f for f in MAPPING_DIR.glob("*.json") if not f.name.startswith("review_")),
+        key=lambda p: p.stat().st_mtime, reverse=True
+    )[:5]
     recent = []
     for s in sessions:
         try:
@@ -1235,6 +1471,251 @@ def list_entities() -> str:
     }, indent=2, ensure_ascii=False)
 
 
+# ============================================================
+# HITL Review Web Server (localhost only)
+# ============================================================
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+_review_server = None
+_review_port = None
+# Search multiple possible locations for review_ui.html
+_REVIEW_HTML_PATH = None
+for _candidate in [
+    Path(__file__).parent / "review_ui.html",                          # same dir as script
+    Path(__file__).parent.parent / "server" / "review_ui.html",        # if script moved up one level
+    Path(__file__).parent.parent / "review_ui.html",                   # parent dir
+    Path(os.environ.get("PII_SHIELD_DIR", "")) / "server" / "review_ui.html",  # env override
+]:
+    if _candidate.exists():
+        _REVIEW_HTML_PATH = _candidate
+        break
+if _REVIEW_HTML_PATH:
+    _blog.info(f"Review UI found at: {_REVIEW_HTML_PATH}")
+else:
+    _blog.warning(f"review_ui.html NOT FOUND. Searched near: {Path(__file__).parent}")
+    _REVIEW_HTML_PATH = Path(__file__).parent / "review_ui.html"  # fallback for error message
+
+
+class _ReviewHandler(BaseHTTPRequestHandler):
+    """Localhost-only review UI handler. PII never leaves the machine."""
+
+    def log_message(self, fmt, *args):
+        """Suppress default HTTP logging to stderr (interferes with MCP stdio)."""
+        pass
+
+    def _send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self, html):
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path.startswith("/review/"):
+            session_id = path.split("/review/")[1]
+            self._serve_review_page(session_id)
+        elif path.startswith("/api/review/"):
+            session_id = path.split("/api/review/")[1]
+            self._serve_review_data(session_id)
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        if "/api/approve/" in path:
+            session_id = path.split("/api/approve/")[1]
+            self._handle_approve(session_id, body)
+        elif "/api/remove_entity/" in path:
+            session_id = path.split("/api/remove_entity/")[1]
+            self._handle_remove_entity(session_id, body)
+        elif "/api/add_entity/" in path:
+            session_id = path.split("/api/add_entity/")[1]
+            self._handle_add_entity(session_id, body)
+        else:
+            self.send_error(404)
+
+    def _serve_review_page(self, session_id):
+        if not _get_review(session_id):
+            self._send_html(f"<h1>Review session not found: {session_id}</h1>")
+            return
+        try:
+            html = _REVIEW_HTML_PATH.read_text(encoding="utf-8")
+            self._send_html(html)
+        except FileNotFoundError:
+            self._send_html(f"<h1>review_ui.html not found</h1><p>Searched: {_REVIEW_HTML_PATH}</p><p>Script: {Path(__file__).resolve()}</p>")
+
+    def _serve_review_data(self, session_id):
+        review = _get_review(session_id)
+        if not review:
+            self._send_json({"error": f"Review session not found: {session_id}"}, 404)
+            return
+        self._send_json({
+            "session_id": session_id,
+            "original_text": review["original_text"],
+            "entities": review["entities"],
+            "confirmed": review["confirmed"],
+            "status": review["status"],
+            "overrides": review["overrides"],
+        })
+
+    def _handle_approve(self, session_id, body):
+        review = _load_review_from_disk(session_id) or _get_review(session_id)
+        if not review:
+            self._send_json({"error": "Session not found"}, 404)
+            return
+        try:
+            overrides = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            overrides = {}
+        review["status"] = "approved"
+        review["overrides"] = {
+            "remove": overrides.get("remove", []),
+            "add": overrides.get("add", []),
+        }
+        _save_review_to_disk(session_id, review)
+        self._send_json({"status": "approved", "session_id": session_id})
+
+    def _handle_remove_entity(self, session_id, body):
+        # Reload from disk to avoid stale data from other processes
+        review = _load_review_from_disk(session_id) or _get_review(session_id)
+        if not review:
+            self._send_json({"error": "Session not found"}, 404)
+            return
+        try:
+            data = json.loads(body)
+            idx = data.get("index")
+        except (json.JSONDecodeError, TypeError):
+            self._send_json({"error": "Invalid JSON"}, 400)
+            return
+        if idx is not None and isinstance(idx, int) and 0 <= idx < len(review.get("entities", [])):
+            if idx not in review["overrides"]["remove"]:
+                review["overrides"]["remove"].append(idx)
+                _save_review_to_disk(session_id, review)
+        self._send_json({"ok": True, "overrides": review["overrides"]})
+
+    def _handle_add_entity(self, session_id, body):
+        # Reload from disk to avoid stale data from other processes
+        review = _load_review_from_disk(session_id) or _get_review(session_id)
+        if not review:
+            self._send_json({"error": "Session not found"}, 404)
+            return
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            self._send_json({"error": "Invalid JSON"}, 400)
+            return
+        text = data.get("text", "").strip()
+        start = data.get("start", -1)
+        end = data.get("end", -1)
+        if not text or start < 0 or end <= start:
+            self._send_json({"error": "Invalid entity: need text, start >= 0, end > start"}, 400)
+            return
+        review["overrides"]["add"].append({
+            "text": text,
+            "type": data.get("type", "PERSON"),
+            "start": start,
+            "end": end,
+        })
+        _save_review_to_disk(session_id, review)
+        self._send_json({"ok": True, "overrides": review["overrides"]})
+
+
+def _start_review_server():
+    """Start localhost-only review web server in a background thread."""
+    global _review_server, _review_port
+    if _review_server is not None:
+        return _review_port
+    _review_port = int(os.environ.get("PII_REVIEW_PORT", "8766"))
+    try:
+        server = HTTPServer(("127.0.0.1", _review_port), _ReviewHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        _review_server = server
+        log.info(f"Review server started on http://127.0.0.1:{_review_port}")
+    except OSError as e:
+        log.warning(f"Could not start review server on port {_review_port}: {e}")
+        # Try next port
+        _review_port += 1
+        try:
+            server = HTTPServer(("127.0.0.1", _review_port), _ReviewHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            _review_server = server
+            log.info(f"Review server started on http://127.0.0.1:{_review_port}")
+        except OSError:
+            log.error("Failed to start review server")
+            return None
+    return _review_port
+
+
+@mcp.tool()
+def start_review(session_id: str = "") -> str:
+    """Start local review server and return the URL. Does NOT open the browser — Claude presents the link to the user via AskUserQuestion.
+    PII stays on your machine."""
+    sid = session_id.strip() or _latest_session_id()
+    if not sid:
+        return json.dumps({"error": "No session. Run anonymize_file first."})
+    review = _get_review(sid)
+    if not review:
+        return json.dumps({"error": f"No review data for session {sid}. Run anonymize_file first."})
+    port = _start_review_server()
+    if port is None:
+        return json.dumps({"error": "Could not start review server."})
+    log.info(f"Review HTML path: {_REVIEW_HTML_PATH} (exists: {_REVIEW_HTML_PATH.exists()})")
+    log.info(f"Server script at: {Path(__file__).resolve()}")
+    url = f"http://localhost:{port}/review/{sid}"
+    entity_count = len([i for i in review.get("confirmed", [])])
+    return json.dumps({
+        "url": url,
+        "session_id": sid,
+        "entities_count": entity_count,
+        "note": "Review server ready. Present this URL to the user via AskUserQuestion. Do NOT open browser automatically.",
+    }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def get_review_status(session_id: str = "") -> str:
+    """Check if user approved the HITL review. Returns status and whether changes were made.
+    PII-safe: never returns override details (entity text). Use review_session_id in anonymize_file to apply them."""
+    sid = session_id.strip() or _latest_session_id()
+    if not sid:
+        return json.dumps({"error": "No session available."})
+    review = _get_review(sid)
+    if not review:
+        return json.dumps({"error": f"No review for session {sid}"})
+    overrides = review.get("overrides", {"remove": [], "add": []})
+    has_changes = bool(overrides.get("remove") or overrides.get("add"))
+    return json.dumps({
+        "session_id": sid,
+        "status": review["status"],
+        "has_changes": has_changes,
+        "removed_count": len(overrides.get("remove", [])),
+        "added_count": len(overrides.get("add", [])),
+    }, indent=2, ensure_ascii=False)
+
+
 def _ensure_ssl_cert(cert_dir: Path):
     """Generate self-signed cert if not exists."""
     cert_file = cert_dir / "cert.pem"
@@ -1279,7 +1760,7 @@ if __name__ == "__main__":
     transport = "sse" if "--sse" in sys.argv else "stdio"
     port = int(os.environ.get("PII_PORT", "8765"))
 
-    log.info(f"Starting PII Shield MCP Server v5.4.0 ({transport})...")
+    log.info(f"Starting PII Shield MCP Server v6.0.0 ({transport})...")
 
     if transport == "sse":
             import ssl

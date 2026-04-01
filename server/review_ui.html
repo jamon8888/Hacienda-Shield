@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PII Shield Review</title>
+<style>
+  :root {
+    --bg: #fafafa; --surface: #ffffff; --text: #1a1a2e; --text-secondary: #6b7280;
+    --border: #e5e7eb; --accent: #10b981; --accent-hover: #059669;
+    --person: #3b82f6; --person-bg: #dbeafe;
+    --org: #8b5cf6; --org-bg: #ede9fe;
+    --location: #10b981; --location-bg: #d1fae5;
+    --comm: #f59e0b; --comm-bg: #fef3c7;
+    --other: #6b7280; --other-bg: #f3f4f6;
+    --danger: #ef4444; --danger-bg: #fee2e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --surface: #1e293b; --text: #e2e8f0; --text-secondary: #94a3b8;
+      --border: #334155;
+      --person-bg: #1e3a5f; --org-bg: #2d1b69; --location-bg: #064e3b;
+      --comm-bg: #78350f; --other-bg: #374151; --danger-bg: #7f1d1d;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+
+  /* Top Bar */
+  .topbar {
+    display: flex; align-items: center; gap: 16px; padding: 12px 24px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .topbar h1 { font-size: 16px; font-weight: 600; flex-shrink: 0; }
+  .topbar .shield-icon { font-size: 20px; }
+  .stats { display: flex; gap: 12px; margin-left: 16px; }
+  .stat {
+    display: flex; align-items: center; gap: 4px; font-size: 13px;
+    color: var(--text-secondary); padding: 4px 10px; border-radius: 6px;
+    background: var(--bg);
+  }
+  .stat .count { font-weight: 600; color: var(--text); }
+  .spacer { flex: 1; }
+  .btn {
+    padding: 8px 20px; border-radius: 8px; border: none; cursor: pointer;
+    font-size: 14px; font-weight: 600; transition: all 0.15s;
+  }
+  .btn-approve {
+    background: var(--accent); color: white;
+  }
+  .btn-approve:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  .btn-approve:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-reset {
+    background: transparent; color: var(--text-secondary); border: 1px solid var(--border);
+  }
+  .btn-reset:hover { background: var(--bg); }
+
+  /* Main Layout */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Document Panel */
+  .doc-panel {
+    flex: 1; overflow-y: auto; padding: 32px 48px;
+  }
+  .doc-content {
+    max-width: 720px; margin: 0 auto; font-size: 15px; line-height: 1.8;
+    white-space: pre-wrap; word-wrap: break-word;
+  }
+
+  /* Entity Highlights */
+  .entity {
+    padding: 1px 4px; border-radius: 4px; cursor: pointer;
+    transition: all 0.15s; position: relative; border-bottom: 2px solid;
+  }
+  .entity:hover { filter: brightness(0.9); }
+  .entity.removed {
+    text-decoration: line-through; opacity: 0.4;
+    border-bottom-style: dashed;
+  }
+  .entity-PERSON, .entity-NRP { background: var(--person-bg); border-color: var(--person); color: var(--person); }
+  .entity-ORG, .entity-ORGANIZATION { background: var(--org-bg); border-color: var(--org); color: var(--org); }
+  .entity-LOCATION { background: var(--location-bg); border-color: var(--location); color: var(--location); }
+  .entity-EMAIL_ADDRESS, .entity-PHONE_NUMBER, .entity-URL, .entity-IP_ADDRESS {
+    background: var(--comm-bg); border-color: var(--comm); color: var(--comm);
+  }
+  .entity-added { border-style: dashed; }
+
+  /* Entity Tooltip */
+  .entity-tooltip {
+    display: none; position: absolute; bottom: calc(100% + 8px); left: 50%;
+    transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; white-space: nowrap; z-index: 50;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 12px;
+  }
+  .entity:hover .entity-tooltip { display: block; }
+  .tooltip-type { font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+  .tooltip-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .tooltip-btn {
+    padding: 3px 10px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--surface); cursor: pointer; font-size: 11px; color: var(--text);
+  }
+  .tooltip-btn.remove { color: var(--danger); border-color: var(--danger); }
+  .tooltip-btn.restore { color: var(--accent); border-color: var(--accent); }
+  .tooltip-btn:hover { filter: brightness(0.9); }
+
+  /* Sidebar */
+  .sidebar {
+    width: 320px; border-left: 1px solid var(--border); background: var(--surface);
+    overflow-y: auto; flex-shrink: 0;
+  }
+  .sidebar-header {
+    padding: 16px; border-bottom: 1px solid var(--border);
+    font-size: 13px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-secondary);
+  }
+  .entity-list { padding: 8px; }
+  .entity-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    border-radius: 6px; cursor: pointer; transition: background 0.1s;
+    font-size: 13px;
+  }
+  .entity-item:hover { background: var(--bg); }
+  .entity-item.removed { opacity: 0.4; text-decoration: line-through; }
+  .entity-item .idx { color: var(--text-secondary); font-size: 11px; width: 20px; }
+  .entity-item .type-badge {
+    font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0;
+  }
+  .type-PERSON .type-badge, .type-NRP .type-badge { background: var(--person-bg); color: var(--person); }
+  .type-ORG .type-badge, .type-ORGANIZATION .type-badge { background: var(--org-bg); color: var(--org); }
+  .type-LOCATION .type-badge { background: var(--location-bg); color: var(--location); }
+  .type-EMAIL_ADDRESS .type-badge, .type-PHONE_NUMBER .type-badge,
+  .type-URL .type-badge, .type-IP_ADDRESS .type-badge { background: var(--comm-bg); color: var(--comm); }
+  .entity-item .text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .entity-item .score { color: var(--text-secondary); font-size: 11px; }
+
+  /* Selection Toolbar */
+  .selection-toolbar {
+    display: none; position: fixed; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+    z-index: 200; gap: 4px;
+  }
+  .selection-toolbar.visible { display: flex; }
+  .selection-toolbar .type-btn {
+    padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer;
+    font-size: 12px; font-weight: 500; transition: all 0.1s;
+    background: var(--bg); color: var(--text);
+  }
+  .selection-toolbar .type-btn:hover { filter: brightness(0.9); transform: translateY(-1px); }
+  .selection-toolbar .type-btn.person { background: var(--person-bg); color: var(--person); }
+  .selection-toolbar .type-btn.org { background: var(--org-bg); color: var(--org); }
+  .selection-toolbar .type-btn.location { background: var(--location-bg); color: var(--location); }
+  .selection-toolbar .type-btn.other { background: var(--other-bg); color: var(--other); }
+
+  /* Approved Overlay */
+  .approved-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    z-index: 300; align-items: center; justify-content: center;
+  }
+  .approved-overlay.visible { display: flex; }
+  .approved-card {
+    background: var(--surface); border-radius: 16px; padding: 48px 64px;
+    text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+  .approved-card .checkmark { font-size: 64px; margin-bottom: 16px; }
+  .approved-card h2 { font-size: 24px; margin-bottom: 8px; }
+  .approved-card p { color: var(--text-secondary); font-size: 14px; }
+
+  /* Legend */
+  .legend {
+    display: flex; gap: 16px; padding: 8px 24px; background: var(--surface);
+    border-top: 1px solid var(--border); font-size: 12px; color: var(--text-secondary);
+    flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="shield-icon">&#x1f6e1;</span>
+  <h1>PII Shield Review</h1>
+  <div class="stats">
+    <div class="stat"><span class="count" id="entity-count">0</span>&nbsp;entities</div>
+    <div class="stat"><span class="count" id="removed-count">0</span>&nbsp;removed</div>
+    <div class="stat"><span class="count" id="added-count">0</span>&nbsp;added</div>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn btn-reset" onclick="resetAll()">Reset</button>
+  <button class="btn btn-approve" id="approve-btn" onclick="approve()">Approve</button>
+</div>
+
+<div class="main">
+  <div class="doc-panel">
+    <div class="doc-content" id="doc-content"></div>
+  </div>
+  <div class="sidebar">
+    <div class="sidebar-header">Detected Entities</div>
+    <div class="entity-list" id="entity-list"></div>
+  </div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--person)"></div> Person</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--org)"></div> Organization</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--location)"></div> Location</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--comm)"></div> Contact</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--other)"></div> Other</div>
+  <div class="spacer"></div>
+  <div class="legend-item" style="color:var(--text-secondary)">Click entity to remove &middot; Select text to add</div>
+</div>
+
+<div class="selection-toolbar" id="selection-toolbar">
+  <button class="type-btn person" onclick="addEntity('PERSON')">Person</button>
+  <button class="type-btn org" onclick="addEntity('ORGANIZATION')">Org</button>
+  <button class="type-btn location" onclick="addEntity('LOCATION')">Location</button>
+  <button class="type-btn other" onclick="addEntity('OTHER')">Other</button>
+</div>
+
+<div class="approved-overlay" id="approved-overlay">
+  <div class="approved-card">
+    <div class="checkmark">&#x2705;</div>
+    <h2>Review Approved</h2>
+    <p>You can close this tab. Claude will continue with the analysis.</p>
+  </div>
+</div>
+
+<script>
+// Session data — injected by server
+let SESSION_ID = '';
+let originalText = '';
+let entities = [];       // [{type, text, start, end, score, verified, idx}]
+let removedIndices = new Set();
+let addedEntities = [];  // [{text, type, start, end}]
+
+const API_BASE = '';  // same origin
+
+async function init() {
+  // Extract session_id from URL: /review/{session_id}
+  const parts = window.location.pathname.split('/review/');
+  SESSION_ID = parts[1] || '';
+  if (!SESSION_ID) { document.getElementById('doc-content').textContent = 'No session ID'; return; }
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/review/${SESSION_ID}`);
+    const data = await resp.json();
+    if (data.error) { document.getElementById('doc-content').textContent = data.error; return; }
+
+    originalText = data.original_text;
+    entities = data.entities.map((e, i) => ({ ...e, idx: i }));
+    render();
+  } catch (err) {
+    document.getElementById('doc-content').textContent = 'Failed to load review data: ' + err.message;
+  }
+}
+
+function getEntityClass(type) {
+  if (['PERSON', 'NRP'].includes(type)) return 'entity-PERSON';
+  if (['ORGANIZATION', 'ORG'].includes(type)) return 'entity-ORG';
+  if (type === 'LOCATION') return 'entity-LOCATION';
+  if (['EMAIL_ADDRESS', 'PHONE_NUMBER', 'URL', 'IP_ADDRESS'].includes(type)) return 'entity-EMAIL_ADDRESS';
+  return 'entity-OTHER';
+}
+
+function getTypeClass(type) {
+  if (['PERSON', 'NRP'].includes(type)) return 'type-PERSON';
+  if (['ORGANIZATION', 'ORG'].includes(type)) return 'type-ORG';
+  if (type === 'LOCATION') return 'type-LOCATION';
+  if (['EMAIL_ADDRESS', 'PHONE_NUMBER', 'URL', 'IP_ADDRESS'].includes(type)) return 'type-EMAIL_ADDRESS';
+  return 'type-OTHER';
+}
+
+function render() {
+  renderDocument();
+  renderSidebar();
+  updateStats();
+}
+
+function renderDocument() {
+  const container = document.getElementById('doc-content');
+  // Merge original + added entities, sort by start position
+  const allEntities = [
+    ...entities.filter(e => e.verified).map(e => ({ ...e, source: 'original' })),
+    ...addedEntities.map((e, i) => ({ ...e, idx: `added_${i}`, source: 'added', score: 1.0 }))
+  ].sort((a, b) => a.start - b.start);
+
+  let html = '';
+  let lastEnd = 0;
+
+  for (const e of allEntities) {
+    if (e.start < lastEnd) continue; // skip overlapping
+    // Text before entity
+    html += escapeHtml(originalText.slice(lastEnd, e.start));
+    // Entity span
+    const isRemoved = e.source === 'original' && removedIndices.has(e.idx);
+    const isAdded = e.source === 'added';
+    const cls = `entity ${getEntityClass(e.type)} ${isRemoved ? 'removed' : ''} ${isAdded ? 'entity-added' : ''}`;
+    const dataIdx = e.source === 'original' ? e.idx : e.idx;
+
+    html += `<span class="${cls}" data-idx="${dataIdx}" data-source="${e.source}" onclick="toggleEntity(this)">`;
+    html += escapeHtml(originalText.slice(e.start, e.end));
+    html += `<span class="entity-tooltip">`;
+    html += `<div class="tooltip-type">${e.type} &middot; ${(e.score * 100).toFixed(0)}%</div>`;
+    if (isRemoved) {
+      html += `<div class="tooltip-actions"><button class="tooltip-btn restore" onclick="event.stopPropagation(); restoreEntity(${e.idx})">Restore</button></div>`;
+    } else if (isAdded) {
+      html += `<div class="tooltip-actions"><button class="tooltip-btn remove" onclick="event.stopPropagation(); removeAdded(${parseInt(String(dataIdx).replace('added_',''))})">Remove</button></div>`;
+    } else {
+      html += `<div class="tooltip-actions"><button class="tooltip-btn remove" onclick="event.stopPropagation(); removeEntity(${e.idx})">Remove</button></div>`;
+    }
+    html += `</span></span>`;
+    lastEnd = e.end;
+  }
+  // Remaining text
+  html += escapeHtml(originalText.slice(lastEnd));
+  container.innerHTML = html;
+}
+
+function renderSidebar() {
+  const list = document.getElementById('entity-list');
+  const confirmedEntities = entities.filter(e => e.verified);
+  let html = '';
+
+  for (const e of confirmedEntities) {
+    const isRemoved = removedIndices.has(e.idx);
+    html += `<div class="entity-item ${getTypeClass(e.type)} ${isRemoved ? 'removed' : ''}" onclick="scrollToEntity(${e.idx})">`;
+    html += `<span class="idx">#${e.idx}</span>`;
+    html += `<span class="type-badge">${e.type}</span>`;
+    html += `<span class="text">${escapeHtml(e.text)}</span>`;
+    html += `<span class="score">${(e.score * 100).toFixed(0)}%</span>`;
+    html += `</div>`;
+  }
+
+  if (addedEntities.length > 0) {
+    html += `<div class="sidebar-header" style="margin-top:8px;padding:8px 12px">Added by you</div>`;
+    for (let i = 0; i < addedEntities.length; i++) {
+      const e = addedEntities[i];
+      html += `<div class="entity-item ${getTypeClass(e.type)}">`;
+      html += `<span class="idx">+</span>`;
+      html += `<span class="type-badge">${e.type}</span>`;
+      html += `<span class="text">${escapeHtml(e.text)}</span>`;
+      html += `<span class="score" style="cursor:pointer;color:var(--danger)" onclick="removeAdded(${i})">&#x2715;</span>`;
+      html += `</div>`;
+    }
+  }
+
+  list.innerHTML = html;
+}
+
+function updateStats() {
+  const confirmed = entities.filter(e => e.verified).length;
+  document.getElementById('entity-count').textContent = confirmed - removedIndices.size + addedEntities.length;
+  document.getElementById('removed-count').textContent = removedIndices.size;
+  document.getElementById('added-count').textContent = addedEntities.length;
+}
+
+function toggleEntity(el) {
+  const source = el.dataset.source;
+  const idx = el.dataset.idx;
+  if (source === 'original') {
+    const numIdx = parseInt(idx);
+    if (removedIndices.has(numIdx)) restoreEntity(numIdx);
+    else removeEntity(numIdx);
+  } else if (source === 'added') {
+    removeAdded(parseInt(idx.replace('added_', '')));
+  }
+}
+
+function removeEntity(idx) {
+  // Remove ALL entities with the same text and type (all occurrences in document)
+  const entity = entities.find(e => e.idx === idx);
+  if (entity) {
+    const normText = entity.text.trim().toLowerCase();
+    const type = entity.type;
+    for (const e of entities) {
+      if (e.verified && e.text.trim().toLowerCase() === normText && e.type === type) {
+        removedIndices.add(e.idx);
+      }
+    }
+  } else {
+    removedIndices.add(idx);
+  }
+  render();
+}
+
+function restoreEntity(idx) {
+  // Restore ALL entities with the same text and type
+  const entity = entities.find(e => e.idx === idx);
+  if (entity) {
+    const normText = entity.text.trim().toLowerCase();
+    const type = entity.type;
+    for (const e of entities) {
+      if (e.text.trim().toLowerCase() === normText && e.type === type) {
+        removedIndices.delete(e.idx);
+      }
+    }
+  } else {
+    removedIndices.delete(idx);
+  }
+  render();
+}
+
+function removeAdded(idx) {
+  addedEntities.splice(idx, 1);
+  render();
+}
+
+function resetAll() {
+  removedIndices.clear();
+  addedEntities = [];
+  render();
+}
+
+// Text selection → add entity
+let pendingSelection = null;
+let toolbarShownAt = 0;  // timestamp when toolbar was last shown
+
+function showToolbarForSelection(e) {
+  const toolbar = document.getElementById('selection-toolbar');
+  const sel = window.getSelection();
+  const text = sel.toString().trim();
+
+  if (!text || text.length < 2 || e.target.closest('.selection-toolbar') || e.target.closest('.sidebar')) {
+    if (!e.target.closest('.selection-toolbar')) toolbar.classList.remove('visible');
+    return;
+  }
+
+  // Find the position in originalText
+  const range = sel.getRangeAt(0);
+  const container = document.getElementById('doc-content');
+  if (!container.contains(range.commonAncestorContainer)) {
+    toolbar.classList.remove('visible');
+    return;
+  }
+
+  // Calculate start position by walking the text content
+  const start = findTextPosition(text);
+  if (start === -1) {
+    toolbar.classList.remove('visible');
+    return;
+  }
+
+  pendingSelection = { text, start, end: start + text.length };
+
+  // Position toolbar near selection
+  const rect = range.getBoundingClientRect();
+  toolbar.style.left = `${rect.left + rect.width / 2 - 120}px`;
+  toolbar.style.top = `${rect.top - 44}px`;
+  toolbar.classList.add('visible');
+  toolbarShownAt = Date.now();
+}
+
+document.addEventListener('mouseup', showToolbarForSelection);
+
+// Double-click: browser selects a word, then show toolbar (fires after mouseup)
+document.addEventListener('dblclick', (e) => {
+  // Small delay to let browser finalize word selection
+  setTimeout(() => showToolbarForSelection(e), 10);
+});
+
+function findTextPosition(selectedText) {
+  // Find position in the original text
+  const idx = originalText.indexOf(selectedText);
+  return idx;
+}
+
+function addEntity(type) {
+  if (!pendingSelection) return;
+  addedEntities.push({
+    text: pendingSelection.text,
+    type: type,
+    start: pendingSelection.start,
+    end: pendingSelection.end,
+  });
+  pendingSelection = null;
+  document.getElementById('selection-toolbar').classList.remove('visible');
+  window.getSelection().removeAllRanges();
+  render();
+}
+
+// Approve
+async function approve() {
+  const btn = document.getElementById('approve-btn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  const overrides = {
+    remove: Array.from(removedIndices),
+    add: addedEntities.map(e => ({ text: e.text, type: e.type, start: e.start, end: e.end })),
+  };
+
+  try {
+    await fetch(`${API_BASE}/api/approve/${SESSION_ID}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(overrides),
+    });
+    document.getElementById('approved-overlay').classList.add('visible');
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Approve';
+    alert('Failed to save: ' + err.message);
+  }
+}
+
+function scrollToEntity(idx) {
+  const el = document.querySelector(`.entity[data-idx="${idx}"][data-source="original"]`);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Close selection toolbar on click outside (but not right after showing it)
+document.addEventListener('mousedown', (e) => {
+  if (!e.target.closest('.selection-toolbar')) {
+    setTimeout(() => {
+      // Don't hide if toolbar was just shown (e.g. during double-click)
+      if (Date.now() - toolbarShownAt < 400) return;
+      if (!e.target.closest('.selection-toolbar')) {
+        document.getElementById('selection-toolbar').classList.remove('visible');
+      }
+    }, 300);
+  }
+});
+
+// Init on load
+init();
+</script>
+</body>
+</html>

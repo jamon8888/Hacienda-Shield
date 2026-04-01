@@ -4,7 +4,7 @@
 
 ## The Problem
 
-You want Claude to review contracts, draft legal memos, compare documents, or suggest edits — but the documents contain real names, addresses, emails, phone numbers, and other sensitive data. Sending raw PII to an LLM raises privacy and compliance concerns (GDPR, internal policies, client confidentiality).
+You want Claude to review contracts, draft legal memos, compare documents, or suggest tracked changes — but the documents contain real names, addresses, emails, phone numbers, and other sensitive data. Sending raw PII to an LLM raises privacy and compliance concerns (GDPR, internal policies, client confidentiality).
 
 ## The Solution
 
@@ -12,18 +12,33 @@ PII Shield sits between your documents and Claude:
 
 1. **You connect a folder** with your documents and select the `pii-contract-analyze` skill
 2. **PII Shield automatically anonymizes** all personal data using GLiNER NER — names become `<PERSON_1>`, companies become `<ORG_1>`, etc.
-3. **Claude analyzes the anonymized text** — writes memos, suggests edits, compares versions — never seeing the real data
-4. **PII Shield restores** the original names back into Claude's output and saves the final document locally
+3. **You review** the anonymization in a local web UI — remove false positives, add missed entities
+4. **Claude analyzes the anonymized text** — writes memos, suggests edits, compares versions — never seeing the real data
+5. **PII Shield restores** the original names back into Claude's output and saves the final document locally
 
 Claude does the thinking. PII Shield keeps the data private.
 
-> **Important: Do NOT attach files directly to your message.** When you attach a file, Cowork renders it and includes the content in the API request — Claude sees the raw data before PII Shield can process it. Instead, **connect a folder** (via the folder icon in Cowork) and tell Claude the file name. This way Claude only sees the file path, extracts text in the sandbox, and sends it through PII Shield before ever reading the content.
+> **Important: Do NOT attach files directly to your message.** When you attach a file, Cowork renders it and includes the content in the API request — Claude sees the raw data before PII Shield can process it. Instead, **connect a folder** (via the folder icon in Cowork) and tell Claude the file name. PII Shield's `anonymize_file` tool receives only the file path — the MCP server on your machine reads and anonymizes the file locally. PII never enters Claude's context.
 
 ```
-Document -> [PII Shield: GLiNER NER] -> Anonymized text -> [Claude: Analysis] -> [PII Shield: Restore] -> Result
-              Acme Corp. -> <ORG_1>                                            <ORG_1> -> Acme Corp.
-              John Smith  -> <PERSON_1>                                        <PERSON_1> -> John Smith
+Document -> [PII Shield on HOST] -> output_path only -> [Claude: reads anonymized file] -> [PII Shield: Restore] -> Result
+              Acme Corp. -> <ORG_1>                                                        <ORG_1> -> Acme Corp.
+              John Smith  -> <PERSON_1>                                                    <PERSON_1> -> John Smith
 ```
+
+---
+
+## What's New in v6.0.0
+
+- **Human-in-the-Loop Review** — Local web UI to review anonymization results: remove false positives, add missed entities. Changes apply to ALL occurrences of the same entity automatically.
+- **Zero PII in API** — `anonymize_file` reads the file on the host, returns only `output_path`. Claude reads the anonymized file from disk. Anonymized text is never in the API response.
+- **PDF support** — `anonymize_file` now handles `.pdf` files (via pdfplumber).
+- **HITL re-anonymization** — `review_session_id` parameter: server fetches user overrides internally. No entity text or override JSON passes through Claude.
+- **Cross-process persistence** — Review data persisted to disk, works across multiple MCP server instances.
+- **`find_file` tool** — Resolves filenames to host paths using configured working directory.
+- **`docx_output_path`** — For `.docx` input, `anonymize_file` returns both `.txt` (for Claude to read) and `.docx` (preserving formatting for REDLINE mode), with consistent placeholder mapping.
+- **Tracked changes support** — `deanonymize_docx` now processes text inside `w:ins`/`w:del` elements (Word tracked changes).
+- **Reduced false positives** — Removed aggressive `DateRecognizer`; dates no longer over-detected in legal documents.
 
 ---
 
@@ -57,11 +72,16 @@ Both are fully self-contained — just download one file and run it.
 
 ### Step 2: Install the extension and skill in Claude Desktop
 
-1. Download [`pii-shield-v5.5.0.mcpb`](dist/pii-shield-v5.5.0.mcpb) and [`pii-contract-analyze.skill`](dist/pii-contract-analyze.skill)
-2. **MCP Server**: In Claude Desktop — **Settings > Extensions > Advanced settings** -> click **Install extension** -> select `pii-shield-v5.5.0.mcpb`
+1. Download [`pii-shield-v6.0.0.mcpb`](dist/pii-shield-v6.0.0.mcpb) and [`pii-contract-analyze.skill`](dist/pii-contract-analyze.skill)
+2. **MCP Server**: In Claude Desktop — **Settings > Extensions > Advanced settings** -> click **Install extension** -> select `pii-shield-v6.0.0.mcpb`
 3. **Skill**: In Claude Desktop — **Customize > Skills** -> click **+** -> **Upload a skill** -> select `pii-contract-analyze.skill`
 
-### Step 3: Use it
+### Step 3: Configure (optional)
+
+In **Settings > Extensions > PII Shield**:
+- **Working directory** — Set the folder where your documents are stored (e.g. `C:\Users\You\Documents\contracts`). This lets `find_file` and `anonymize_file` resolve filenames automatically.
+
+### Step 4: Use it
 
 1. Start a new conversation in Claude Desktop
 2. Select the **pii-contract-analyze** skill
@@ -72,9 +92,23 @@ Both are fully self-contained — just download one file and run it.
 You: Analyze risks for the purchaser in contract.pdf and prepare a short memo
 ```
 
-Claude will read the file from the connected folder, anonymize it through PII Shield, analyze the anonymized version, and deliver the final memo with real names restored.
+Claude will call `anonymize_file` (only the file path goes through the API), read the anonymized text from the output file, offer you a review link, analyze the anonymized version, and deliver the final memo with real names restored.
 
 If you ran the pre-install script (Step 1), PII Shield loads in ~30 seconds. If not, Claude will show installation progress (~5-10 min, first time only).
+
+---
+
+## Human-in-the-Loop Review
+
+After anonymization, Claude offers you a review step with a local web UI:
+
+1. **Claude calls `start_review`** — starts a localhost-only web server and presents the URL
+2. **You open the link** in your browser — see the full document with color-coded entity highlights
+3. **Remove false positives** — click any highlighted entity to remove it. All occurrences of the same text are removed automatically.
+4. **Add missed entities** — select text and choose the entity type. All occurrences are added automatically during re-anonymization.
+5. **Approve** — Claude re-anonymizes with your corrections. The server fetches overrides internally — no PII passes through the API.
+
+PII never leaves your machine. The review page runs on `localhost:8766`.
 
 ---
 
@@ -91,12 +125,27 @@ This only happens once. After the first install, PII Shield starts in seconds.
 
 ---
 
+## Privacy Architecture
+
+PII Shield is designed so that **PII never flows through Claude's API** at any stage:
+
+| Stage | What happens | PII in API? |
+|-------|-------------|-------------|
+| **Anonymize** | `anonymize_file(path)` — server reads file on host, writes anonymized `.txt` to disk, returns only `output_path` | No — only path string |
+| **Claude reads** | Claude reads the anonymized `.txt` file from disk | No — only placeholders |
+| **HITL Review** | User reviews on localhost web UI. Server stores overrides to disk. | No — localhost only |
+| **Re-anonymize** | `anonymize_file(path, review_session_id=id)` — server loads overrides from disk internally | No — only path + session ID |
+| **Deanonymize** | `deanonymize_docx(path, session_id)` — writes restored file to disk, returns only path | No — only path string |
+| **Deliver** | Claude gives user the file path. Claude NEVER reads the deanonymized file. | No |
+
+---
+
 ## Use Cases
 
 | Use case | What happens |
 |----------|-------------|
-| **Legal memo** | Upload a contract, get risk analysis. Claude works with `<ORG_1>` and `<PERSON_2>`, PII Shield restores real names in the final .docx |
-| **Contract redline** | Ask Claude to suggest tracked changes. All edits reference placeholders; restored document has real names |
+| **Legal memo** | Connect a folder with a contract, get risk analysis. Claude works with `<ORG_1>` and `<PERSON_2>`, PII Shield restores real names in the final .docx |
+| **Contract redline** | Ask Claude to suggest tracked changes on the anonymized .docx. All edits reference placeholders; restored document has real names with Word-native revision marks |
 | **Bulk review** | Upload up to 5 NDAs, get a comparison table. Each file gets its own prefix (`D1`, `D2`...) |
 | **Quick summary** | Drop a 20-page agreement, get a structured overview without exposing any PII |
 | **Anonymize only** | Just anonymize a document for external sharing, no LLM analysis needed |
@@ -105,11 +154,14 @@ This only happens once. After the first install, PII Shield starts in seconds.
 
 - **High-quality NER** — GLiNER zero-shot NER (`urchade/gliner_small-v2.1`) — handles ALL-CAPS legal names, domain-specific companies
 - **Self-bootstrapping** — Auto-installs all dependencies on first run (or pre-install for instant start)
+- **Human-in-the-Loop Review** — Local web UI to verify anonymization, remove false positives, add missed entities
+- **PDF support** — `anonymize_file` handles `.pdf`, `.docx`, `.txt`, `.md`, `.csv`
 - **Exact entity forms** — "Acme" (`<ORG_1>`) and "Acme Corp." (`<ORG_1a>`) get separate placeholders, each restored exactly
 - **False positive filtering** — Stop-list for common legal terms + Cyrillic homoglyph handling
-- **DOCX support** — Anonymize/deanonymize Word documents preserving all formatting
+- **DOCX support** — Anonymize/deanonymize Word documents preserving all formatting, including tracked changes (`w:ins`/`w:del`)
 - **17 EU pattern recognizers** — UK NIN/NHS, DE Tax ID, FR NIR, IT Fiscal Code, ES DNI/NIE, CY TIC, EU VAT/IBAN, and more
-- **PII-safe by design** — Mapping stored locally, real values never returned to Claude
+- **Cross-process persistence** — Review data saved to disk, works across multiple MCP server instances
+- **PII-safe by design** — Mapping stored locally, real values never returned to Claude, deanonymized files never read by Claude
 
 ## Entity Deduplication
 
@@ -129,6 +181,8 @@ PII Shield uses family-based deduplication that preserves exact entity forms:
 
 **Pattern-based** (Presidio + EU recognizers): EMAIL_ADDRESS, PHONE_NUMBER, URL, IP_ADDRESS, CREDIT_CARD, IBAN_CODE, CRYPTO, US_SSN, US_PASSPORT, US_DRIVER_LICENSE, UK_NHS, UK_NIN, UK_PASSPORT, DE_TAX_ID, FR_NIR, IT_FISCAL_CODE, ES_DNI, ES_NIE, CY_TIC, EU_VAT, and more.
 
+> **Note:** DATE_TIME detection is disabled by default — Presidio's DateRecognizer produces too many false positives on legal documents ("30 days", section numbers, standalone years).
+
 ---
 
 ## Architecture
@@ -142,14 +196,18 @@ PII Shield uses family-based deduplication that preserves exact entity forms:
 |  |              |       |                     | |
 |  | SKILL.md     |  MCP  | pii_shield_server.py| |
 |  | (instructions|<----->| eu_recognizers.py   | |
-|  |  for Claude) | stdio |                     | |
-|  +--------------+       |  +---------------+  | |
-|                         |  |  PIIEngine     |  | |
+|  |  for Claude) | stdio | review_ui.html      | |
+|  +--------------+       |                     | |
+|                         |  +---------------+  | |
+|                         |  |  PIIEngine    |  | |
 |                         |  |               |  | |
 |                         |  | Presidio +    |  | |
-|                         |  | GLiNER NER +    |  | |
+|                         |  | GLiNER NER +  |  | |
 |                         |  | SpaCy         |  | |
 |                         |  +---------------+  | |
+|                         |                     | |
+|                         |  Review Web Server  | |
+|                         |  (localhost:8766)    | |
 |                         +---------------------+ |
 +-------------------------------------------------+
 ```
@@ -168,34 +226,40 @@ Server starts accepting MCP connections after Phase 1 (~2 seconds). Tools respon
 
 | Tool | Description |
 |------|------------|
-| `anonymize_text` | Anonymize PII in plain text |
-| `anonymize_file` | Anonymize PII in a file (.docx, .txt, .md, .csv) |
-| `anonymize_docx` | Anonymize PII in .docx preserving formatting |
+| `anonymize_file` | **Preferred.** Anonymize PII in a file (.pdf, .docx, .txt, .md, .csv). Only the file path goes through the API. For .docx, returns both `.txt` and `.docx` output. |
+| `find_file` | Find a file by name in the configured working directory |
+| `start_review` | Start local HITL review server, return URL (does not open browser) |
+| `get_review_status` | Check if user approved the review. Returns status + has_changes only (no PII) |
 | `deanonymize_text` | Restore PII — writes to local file, never returns to Claude |
-| `deanonymize_docx` | Restore PII in .docx preserving formatting |
+| `deanonymize_docx` | Restore PII in .docx preserving formatting (including tracked changes) |
 | `get_mapping` | Get placeholder keys and types (no real PII values) |
-| `scan_text` | Detect PII without anonymizing (preview mode) |
 | `list_entities` | Show status, backend info, and recent sessions |
+| `anonymize_text` | Anonymize PII in plain text (use `anonymize_file` instead for privacy) |
+| `anonymize_docx` | Anonymize PII in .docx preserving formatting (use `anonymize_file` instead) |
+| `scan_text` | Detect PII without anonymizing (preview mode) |
 
 ## Skill Modes
 
 | Mode | Description |
 |------|------------|
 | **MEMO** | Legal analysis memo with risk assessment |
-| **REDLINE** | Tracked changes / markup in contract |
+| **REDLINE** | Tracked changes in contract with Word-native revision marks |
 | **SUMMARY** | Brief overview of key terms |
 | **COMPARISON** | Diff two documents |
 | **BULK** | Process up to 5 files |
+| **ANONYMIZE-ONLY** | Just anonymize, no analysis |
 
 ## Configuration
 
-Environment variables (set in Cowork extension settings):
+Set in Claude Desktop: **Settings > Extensions > PII Shield**
 
-| Variable | Default | Description |
-|----------|---------|------------|
-| `PII_MIN_SCORE` | `0.35` | Minimum NER confidence threshold (0.0-1.0) |
-| `PII_GLINER_MODEL` | `urchade/gliner_small-v2.1` | HuggingFace GLiNER model for zero-shot NER |
-| `PII_MAPPING_TTL_DAYS` | `7` | Auto-delete mappings older than N days |
+| Setting | Default | Description |
+|---------|---------|------------|
+| Min confidence score | `0.35` | Minimum NER confidence threshold (0.0-1.0) |
+| GLiNER model | `urchade/gliner_small-v2.1` | HuggingFace GLiNER model for zero-shot NER |
+| Working directory | *(empty)* | Folder path for automatic file resolution by `find_file` |
+
+Environment variable `PII_MAPPING_TTL_DAYS` (default: `7`) — auto-delete mappings older than N days.
 
 ## Project Structure
 
@@ -204,13 +268,13 @@ PII-Shield/
 |-- server/
 |   |-- pii_shield_server.py    # MCP server (main)
 |   |-- eu_recognizers.py       # 17 EU pattern recognizers
+|   |-- review_ui.html          # HITL review web UI
 |   |-- requirements.txt
 |   +-- pyproject.toml
 |-- pii-contract-analyze/
 |   +-- SKILL.md                # Skill instructions for Claude
 |-- dist/
-|   |-- pii-shield-v5.5.0.mcpb # Ready-to-install MCP bundle
-|   |-- pii-contract-analyze.skill
+|   |-- pii-shield-v6.0.0.mcpb # Ready-to-install MCP bundle
 |   +-- pii-contract-analyze.skill
 |-- manifest.json               # MCP bundle manifest
 |-- setup_pii_shield.py         # Pre-install script (Python)
@@ -241,7 +305,9 @@ python setup_pii_shield.py
 | First run takes forever | Run `python setup_pii_shield.py` first, or wait ~10 min for auto-install |
 | Tools not appearing | Wait 30-60 seconds, then send any message to Claude. Tools load lazily. |
 | "pip install failed" | Check your internet connection. Corporate firewalls may block PyPI or HuggingFace |
-| BERT model download fails | The server falls back to SpaCy-only NER (lower quality but functional). Retry later or check proxy settings |
+| GLiNER model download fails | The server falls back to SpaCy-only NER (lower quality but functional). Retry later or check proxy settings |
+| HITL review page not loading | Check that port 8766 is free. The server tries port 8767 as fallback. |
+| Too many false positives | DATE_TIME detection is disabled. If still too many, raise `PII_MIN_SCORE` to 0.5 in extension settings. |
 
 ## Author
 

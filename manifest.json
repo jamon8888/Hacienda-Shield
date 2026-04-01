@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "pii-shield",
   "display_name": "PII Shield",
-  "version": "5.5.0",
+  "version": "6.0.0",
   "description": "Anonymize PII in documents. GLiNER zero-shot NER for high-quality entity recognition in legal documents.",
   "long_description": "PII Shield provides automated PII detection and anonymization for legal document analysis. v5.5 uses GLiNER (DeBERTa-v3 zero-shot NER) via Presidio's GLiNERRecognizer for high-quality named entity recognition — handles ALL-CAPS names, domain-specific company names, and legal document patterns. SpaCy handles tokenization, GLiNER handles NER. Falls back to SpaCy-only if GLiNER is unavailable. Also includes: fuzzy entity deduplication, prefix support for multi-file workflows, two-pass boundary cleanup with false-positive filtering, 17 EU pattern recognizers. Deanonymized output is written to local files only — PII never flows back through Claude.",
   "author": {
@@ -19,19 +19,23 @@
       ],
       "env": {
         "PII_MIN_SCORE": "${user_config.pii_min_score}",
-        "PII_GLINER_MODEL": "${user_config.gliner_model}"
+        "PII_GLINER_MODEL": "${user_config.gliner_model}",
+        "PII_WORK_DIR": "${user_config.work_dir}"
       }
     }
   },
   "tools": [
+    {"name": "find_file", "description": "Find a file on the host by filename. Searches the configured working directory only."},
     {"name": "anonymize_text", "description": "Anonymize PII in text"},
-    {"name": "anonymize_file", "description": "Anonymize PII in a file (.docx, .txt, .md, .csv)"},
+    {"name": "anonymize_file", "description": "Anonymize PII in a file (.pdf, .docx, .txt, .md, .csv). PREFERRED — PII stays on host. Pass review_session_id for HITL re-anonymization (server applies overrides internally)."},
     {"name": "anonymize_docx", "description": "Anonymize PII in .docx preserving formatting"},
     {"name": "deanonymize_text", "description": "Restore PII to local .docx file (never returns PII to Claude)"},
     {"name": "deanonymize_docx", "description": "Restore PII in .docx preserving formatting (file only)"},
     {"name": "get_mapping", "description": "Get placeholder keys and types (no real PII values)"},
     {"name": "scan_text", "description": "Detect PII without anonymizing (preview mode)"},
-    {"name": "list_entities", "description": "Show status, supported types, and recent sessions"}
+    {"name": "list_entities", "description": "Show status, supported types, and recent sessions"},
+    {"name": "start_review", "description": "Start local review server and return URL for HITL verification. Does NOT open browser. PII stays on your machine."},
+    {"name": "get_review_status", "description": "Check if user approved the HITL review. Returns status and has_changes only (no PII or override details)."}
   ],
   "keywords": ["pii", "anonymize", "gdpr", "privacy", "legal", "presidio", "ner", "gliner", "zero-shot"],
   "license": "MIT",
@@ -48,6 +52,13 @@
       "title": "GLiNER NER model",
       "description": "HuggingFace GLiNER model name for zero-shot NER",
       "default": "urchade/gliner_small-v2.1",
+      "required": false
+    },
+    "work_dir": {
+      "type": "string",
+      "title": "Working directory",
+      "description": "Folder path where your documents are stored (e.g. C:\\Users\\You\\Documents\\contracts). Used by find_file and anonymize_file for automatic path resolution.",
+      "default": "",
       "required": false
     }
   },
