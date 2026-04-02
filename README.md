@@ -293,6 +293,15 @@ python server/pii_shield_server.py --sse
 python setup_pii_shield.py
 ```
 
+## Logs
+
+PII Shield writes two local log files. Neither is sent anywhere — both stay on your machine.
+
+| Log | Location | What's inside |
+|-----|----------|---------------|
+| **Audit log** | `~/.pii_shield/audit/mcp_audit.log` | Every MCP tool call and response. Proves that only file paths and session IDs flow through the API — no real names, addresses, or other PII. Hand this to your compliance team. |
+| **Debug log** | `pii_shield_debug.log` (in the output folder) | Raw NER detections, skip reasons, recognizer names, anonymization mapping, docx replacement details. Use this to diagnose why an entity was missed or incorrectly detected. |
+
 ## Troubleshooting
 
 | Problem | Solution |

@@ -269,6 +269,61 @@ def _ensure_file_log(folder=None):
     _flog.info(f"===== PII Shield session started =====")
     log.info(f"Debug log: {log_path}")
 
+# --- MCP audit logger: logs every tool request/response to prove no PII leaves the machine ---
+_audit_log = logging.getLogger("pii-shield-audit")
+_audit_log.setLevel(logging.DEBUG)
+_audit_log.propagate = False
+_audit_handler = None
+
+def _ensure_audit_log():
+    """Set up audit logger in ~/.pii_shield/audit/. Created once, persists across sessions."""
+    global _audit_handler
+    if _audit_handler is not None:
+        return
+    audit_dir = Path.home() / ".pii_shield" / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = audit_dir / "mcp_audit.log"
+    _audit_handler = logging.FileHandler(str(audit_path), mode="a", encoding="utf-8")
+    _audit_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _audit_log.addHandler(_audit_handler)
+    log.info(f"Audit log: {audit_path}")
+
+def _audit_tool(func):
+    """Decorator that logs every MCP tool call (args) and response to the audit log."""
+    import functools, inspect
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        _ensure_audit_log()
+        # Build readable args: match parameter names to values
+        sig = inspect.signature(func)
+        param_names = list(sig.parameters.keys())
+        call_args = {}
+        for i, v in enumerate(args):
+            if i < len(param_names):
+                call_args[param_names[i]] = v
+        call_args.update(kwargs)
+        # Truncate long text values in the log (the point is to prove they DON'T contain PII)
+        safe_args = {}
+        for k, v in call_args.items():
+            if isinstance(v, str) and len(v) > 500:
+                safe_args[k] = v[:200] + f"... [{len(v)} chars total]"
+            else:
+                safe_args[k] = v
+        _audit_log.info(f">>> CALL {func.__name__}({json.dumps(safe_args, ensure_ascii=False)})")
+        try:
+            result = func(*args, **kwargs)
+            # Truncate response too
+            if isinstance(result, str) and len(result) > 1000:
+                logged_result = result[:500] + f"... [{len(result)} chars total]"
+            else:
+                logged_result = result
+            _audit_log.info(f"<<< RESP {func.__name__} -> {logged_result}")
+            return result
+        except Exception as exc:
+            _audit_log.info(f"<<< ERR  {func.__name__} -> {type(exc).__name__}: {exc}")
+            raise
+    return wrapper
+
 # ============================================================
 # Config
 # ============================================================
@@ -1591,6 +1646,7 @@ def _check_ready():
 
 
 @mcp.tool()
+@_audit_tool
 def anonymize_text(text: str, language: str = "en", prefix: str = "", entity_overrides: str = "") -> str:
     """Anonymize PII in text. Returns indexed placeholders + session_id for deanonymization.
     Use prefix (e.g. "D1") for multi-file workflows to avoid placeholder collisions.
@@ -1603,6 +1659,7 @@ def anonymize_text(text: str, language: str = "en", prefix: str = "", entity_ove
 
 
 @mcp.tool()
+@_audit_tool
 def anonymize_file(file_path: str, language: str = "en", prefix: str = "", review_session_id: str = "") -> str:
     """Anonymize PII in a file. Auto-detects format: .pdf, .docx (preserves formatting), .txt/.md/.csv (plain text).
     Use prefix (e.g. "D1") for multi-file workflows to avoid placeholder collisions.
@@ -1731,6 +1788,7 @@ def anonymize_file(file_path: str, language: str = "en", prefix: str = "", revie
 
 
 @mcp.tool()
+@_audit_tool
 def find_file(filename: str) -> str:
     """Find a file on the host machine by filename. Searches the configured work_dir (Settings > Extensions > PII Shield).
     If work_dir is not set or file not found there, returns an error — ask the user for the path."""
@@ -1758,6 +1816,7 @@ def find_file(filename: str) -> str:
 
 
 @mcp.tool()
+@_audit_tool
 def anonymize_docx(file_path: str, language: str = "en", prefix: str = "") -> str:
     """Anonymize PII in .docx preserving all formatting. Use for round-trip document editing.
     Use prefix (e.g. "D1") for multi-file workflows to avoid placeholder collisions."""
@@ -1772,6 +1831,7 @@ def anonymize_docx(file_path: str, language: str = "en", prefix: str = "") -> st
 
 
 @mcp.tool()
+@_audit_tool
 def deanonymize_text(text: str, session_id: str = "", output_path: str = "") -> str:
     """Restore real PII values in text. Writes result to .docx file — never returns PII to Claude.
     Returns only the file path. output_path should end with .docx (default) or .txt."""
@@ -1836,6 +1896,7 @@ def _write_docx(text: str, path: Path):
 
 
 @mcp.tool()
+@_audit_tool
 def deanonymize_docx(file_path: str, session_id: str = "") -> str:
     """Restore real PII in .docx preserving formatting."""
     sid = session_id.strip() or _latest_session_id()
@@ -1852,6 +1913,7 @@ def deanonymize_docx(file_path: str, session_id: str = "") -> str:
 
 
 @mcp.tool()
+@_audit_tool
 def get_mapping(session_id: str = "") -> str:
     """Retrieve mapping metadata (placeholder keys and entity types only — no real PII values).
     Full mapping stays on disk, never returned to LLM."""
@@ -1876,6 +1938,7 @@ def get_mapping(session_id: str = "") -> str:
 
 
 @mcp.tool()
+@_audit_tool
 def scan_text(text: str, language: str = "en") -> str:
     """Detect PII without anonymizing. Preview mode. Returns entity types and positions, not real text values."""
     loading = _check_ready()
@@ -1902,6 +1965,7 @@ def scan_text(text: str, language: str = "en") -> str:
 
 
 @mcp.tool()
+@_audit_tool
 def list_entities() -> str:
     """Show status, supported types, and recent sessions."""
     # Always show recent sessions (no engine needed)
@@ -2163,6 +2227,7 @@ def _start_review_server():
 
 
 @mcp.tool()
+@_audit_tool
 def start_review(session_id: str = "") -> str:
     """Start local review server and return the URL. Does NOT open the browser — Claude presents the link to the user via AskUserQuestion.
     PII stays on your machine."""
@@ -2188,6 +2253,7 @@ def start_review(session_id: str = "") -> str:
 
 
 @mcp.tool()
+@_audit_tool
 def get_review_status(session_id: str = "") -> str:
     """Check if user approved the HITL review. Returns status and whether changes were made.
     PII-safe: never returns override details (entity text). Use review_session_id in anonymize_file to apply them."""
