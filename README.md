@@ -30,21 +30,11 @@ Document -> [PII Shield on HOST] -> output_path only -> [Claude: reads anonymize
 
 ## What's New in v6.0.0
 
-- **Human-in-the-Loop Review** — Local web UI to review anonymization results: remove false positives, add missed entities. Changes apply to ALL occurrences of the same entity automatically.
-- **Zero PII in API** — `anonymize_file` reads the file on the host, returns only `output_path`. Claude reads the anonymized file from disk. Anonymized text is never in the API response.
-- **PDF support** — `anonymize_file` now handles `.pdf` files (via pdfplumber).
-- **HITL re-anonymization** — `review_session_id` parameter: server fetches user overrides internally. No entity text or override JSON passes through Claude.
-- **Cross-process persistence** — Review data persisted to disk, works across multiple MCP server instances.
-- **`find_file` tool** — Resolves filenames to host paths using configured working directory.
-- **`docx_output_path`** — For `.docx` input, `anonymize_file` returns both `.txt` (for Claude to read) and `.docx` (preserving formatting for REDLINE mode), with consistent placeholder mapping.
-- **Tracked changes support** — `deanonymize_docx` now processes text inside `w:ins`/`w:del` elements (Word tracked changes).
-- **212-term false positive stoplist** — Contract roles, job titles, legal terms, generic nouns, abbreviations, brand names. Article stripping ("the Contractor" → matches "contractor"). Multi-word check (all significant words in stoplist → drop). Cyrillic homoglyph normalization.
-- **Min score raised to 0.50** — Reduces low-confidence noise from both GLiNER and SpaCy while keeping real PII.
-- **Output subdirectory** — `anonymize_file` creates a per-session subfolder (`pii_shield_<id>/`) to organize generated files.
-- **Diagnostic logging** — Detailed `pii_shield_debug.log` in the output folder: raw NER detections, skip reasons, confirmed entities with recognizer names, anonymization mapping, docx pass details.
-- **Review UI accuracy** — `_docx_to_html` now replicates `para.text` character positions exactly (direct child `w:r`/`w:hyperlink` only), eliminating text drift in the review web UI.
-- **Cross-run docx replacement** — Handles `w:br`, `w:tab`, `w:cr` inside runs; cross-paragraph replacements via sliding window.
-- **VirtioFS compatibility** — `os.fsync()` after docx save to ensure file visibility through virtualized mounts.
+- **Human-in-the-Loop Review** — Local web UI to review detected entities: remove false positives, add missed ones. All occurrences updated automatically.
+- **Zero PII in API** — `anonymize_file` returns only `output_path`. Claude reads the anonymized file from disk — real data never enters the API.
+- **212-term false positive filter** — Stoplist for contract roles, legal terms, generic nouns, abbreviations. Strips articles ("the Contractor" → "contractor"), checks multi-word phrases, handles Cyrillic homoglyphs.
+- **PDF + DOCX + tracked changes** — Handles `.pdf` (pdfplumber), `.docx` with formatting preservation, and `w:ins`/`w:del` in Word tracked changes.
+- **Diagnostic logging** — `pii_shield_debug.log` with raw NER detections, skip reasons, recognizer names, and full anonymization trace.
 
 ---
 
