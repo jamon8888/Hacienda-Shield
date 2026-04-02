@@ -519,9 +519,13 @@ class PIIEngine:
         from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
         registry = RecognizerRegistry()
         registry.load_predefined_recognizers()
-        # Remove DateRecognizer — too aggressive on legal docs (catches "30 days", section numbers, years)
-        registry.recognizers = [r for r in registry.recognizers if type(r).__name__ != "DateRecognizer"]
-        log.info(f"Loaded {len(registry.recognizers)} predefined recognizers (DateRecognizer removed)")
+        # Remove noisy recognizers:
+        # - DateRecognizer: too aggressive on legal docs (catches "30 days", section numbers, years)
+        # - SpacyRecognizer: flat score=0.85 on everything, generates 90%+ false positives.
+        #   GLiNER handles NER with meaningful confidence scores. SpaCy stays as tokenizer only.
+        _remove_recognizers = {"DateRecognizer", "SpacyRecognizer"}
+        registry.recognizers = [r for r in registry.recognizers if type(r).__name__ not in _remove_recognizers]
+        log.info(f"Loaded {len(registry.recognizers)} predefined recognizers (DateRecognizer + SpacyRecognizer removed)")
 
         # --- Try GLiNER (zero-shot NER), fallback to SpaCy-only ---
         backend_used = "spacy (en_core_web_sm) [FALLBACK]"
@@ -684,6 +688,7 @@ class PIIEngine:
         "vice president", "manager", "supervisor", "administrator",
         "coordinator", "counsel", "attorney", "auditor", "comptroller",
         "commissioner", "mediator", "arbitrator", "notary",
+        "general counsel", "key employee", "key employees",
         "ceo", "cfo", "cto", "coo", "cmo", "cio", "cpo",
         # ── Document / legal structural terms ──
         "order", "agreement", "contract", "amendment", "addendum",
@@ -691,19 +696,37 @@ class PIIEngine:
         "article", "clause", "paragraph", "recital", "preamble",
         "purchase order", "statement of work", "scope of work",
         "whereas", "herein", "thereof", "therein", "hereby",
+        "definitions", "interpretation", "counterparts", "announcements",
+        "variation", "assignment", "notices", "costs",
+        # ── M&A / SPA / corporate transaction terms ──
+        "shares", "share", "sale", "completion", "conditions",
+        "warranties", "warranty", "representations", "covenants",
+        "obligations", "undertakings", "indemnities", "limitations",
+        "transaction", "acquisition", "disposal", "transfer",
+        "consideration", "purchase price", "closing", "escrow",
+        "due diligence", "disclosure", "material adverse",
+        "pre-completion", "post-completion", "longstop",
+        "lien", "encumbrance", "pledge", "charge", "mortgage",
+        "de minimis", "de minimis amount", "basket", "cap",
+        "tax", "taxation", "tax covenant", "tax deed",
+        "hmrc", "customs", "revenue",
         # ── Legal concepts (capitalized in contracts → NER false positives) ──
         "effective date", "termination date", "commencement date",
         "governing law", "force majeure", "confidential information",
         "intellectual property", "indemnification", "arbitration",
         "term", "territory", "termination", "jurisdiction",
-        "warranty", "liability", "negligence", "damages",
+        "liability", "negligence", "damages",
         "breach", "remedy", "waiver", "severability",
+        "claim", "claims", "dispute", "proceedings", "litigation",
+        "consent", "approval", "authority", "resolution",
         # ── Generic business / corporate terms ──
         "company", "corporation", "entity", "firm", "business",
         "affiliate", "subsidiary", "parent", "division", "branch",
         "enterprise", "venture", "consortium", "syndicate",
         "board", "committee", "department", "office",
+        "body corporate", "government", "association", "partnership",
         # ── Generic nouns NER misclassifies as PERSON ──
+        "person", "individual", "persons", "individuals",
         "actor", "actors", "creator", "creators", "model", "models",
         "influencer", "influencers", "talent", "talents",
         "candidate", "applicant", "recipient", "subscriber",
@@ -713,12 +736,13 @@ class PIIEngine:
         "performer", "speaker", "presenter", "moderator",
         "witness", "signatory", "undersigned",
         "purchase", "invoice", "payment", "delivery", "shipment",
+        "name", "practice", "relevant person",
         # ── Short ambiguous words (SpaCy/GLiNER false positives) ──
         "will", "may", "case", "show", "set", "lead", "head",
         "share", "note", "record", "draft", "release", "notice",
         # ── Abbreviations ──
         "cta", "nda", "sow", "msa", "sla", "roi", "kpi",
-        "llc", "ltd", "inc", "corp", "plc", "gmbh", "sarl",
+        "llc", "ltd", "inc", "corp", "plc", "gmbh", "sarl", "llp",
         "usd", "eur", "gbp", "jpy", "cny",
         # ── Software / product / brand names (not PII) ──
         "adobe", "adobe premiere", "adobe premiere pro", "adobe after effects",
@@ -774,10 +798,17 @@ class PIIEngine:
                     or stripped in _sl or stripped_latin in _sl):
                 log.info(f"FP drop (stop-list): '{txt}' (type={etype})")
                 continue
-            # Also drop if ALL meaningful words are in stoplist
-            _skip_words = {"the", "a", "an", "of", "and", "or", "for", "in", "to", "by"}
+            # Also drop if ALL words are function words or in stoplist
+            _skip_words = {"the", "a", "an", "of", "and", "or", "for", "in", "to", "by",
+                           "on", "at", "is", "it", "as", "if", "so", "no", "not", "its",
+                           "this", "that", "with", "from", "but", "all", "any", "each",
+                           "such", "than", "into", "upon", "per", "via", "re", "vs"}
             meaningful = [w for w in norm_txt.split() if w not in _skip_words]
-            if meaningful and all(w in _sl for w in meaningful):
+            if not meaningful:
+                # Entity is entirely function words (e.g. "the", "a", "an") — never PII
+                log.info(f"FP drop (function words only): '{txt}' (type={etype})")
+                continue
+            if all(w in _sl for w in meaningful):
                 log.info(f"FP drop (all words in stop-list): '{txt}' (type={etype})")
                 continue
 
@@ -789,7 +820,45 @@ class PIIEngine:
                                  f"(type={etype}, score={e.get('score', '?')})")
                         continue
 
+            # Rule 2: Pattern-based FP — short text matched by document-type recognizers
+            # EU_VAT/UK_DRIVING_LICENCE/DE_SOCIAL_SECURITY often match "Tax", "Taxation" etc.
+            _NOISY_PATTERN_TYPES = {
+                "DE_SOCIAL_SECURITY", "EU_VAT", "UK_DRIVING_LICENCE",
+                "MEDICAL_LICENSE", "NRP",
+            }
+            if etype in _NOISY_PATTERN_TYPES and norm_txt in _sl:
+                log.info(f"FP drop (noisy pattern + stoplist): '{txt}' (type={etype})")
+                continue
+
+            # Rule 3: "Schedule N", "Clause N", "Section N" — structural references, not PII
+            import re as _re
+            if _re.match(r'^(schedule|clause|section|article|appendix|annex|exhibit|part|recital)\s+\d', norm_txt):
+                log.info(f"FP drop (structural reference): '{txt}' (type={etype})")
+                continue
+
+            # Rule 4: ALL-CAPS single word ≤10 chars that's in stoplist — section heading
+            if txt.isupper() and len(txt) <= 12 and norm_txt in _sl:
+                log.info(f"FP drop (all-caps heading): '{txt}' (type={etype})")
+                continue
+
             cleaned.append(e)
+
+        # Rule 5: Frequency filter — if same text appears as entity >8 times,
+        # it's almost certainly a structural/legal term, not a real PII name.
+        # Real names rarely appear 10+ times; "Company"/"Buyer"/"Seller" do.
+        from collections import Counter
+        text_counts = Counter(e["text"].lower().strip() for e in cleaned
+                              if e.get("type") in PIIEngine._NAMED_ENTITY_TYPES)
+        high_freq = {t for t, c in text_counts.items() if c > 8}
+        if high_freq:
+            before = len(cleaned)
+            cleaned = [e for e in cleaned
+                       if e["text"].lower().strip() not in high_freq
+                       or e.get("type") not in PIIEngine._NAMED_ENTITY_TYPES]
+            if len(cleaned) < before:
+                log.info(f"FP drop (frequency >8): removed {before - len(cleaned)} entities, "
+                         f"terms: {high_freq}")
+
         return cleaned
 
     @classmethod
@@ -799,10 +868,10 @@ class PIIEngine:
         entities = cls._filter_false_positives(entities)
         return entities
 
-    def _analyze_chunked(self, text, language="en", chunk_size=2500, overlap=200):
+    def _analyze_chunked(self, text, language="en", chunk_size=4000, overlap=250):
         """Run analyzer on text in chunks to avoid GLiNER timeout on long texts.
         Chunks overlap to avoid splitting entities at boundaries.
-        chunk_size=2500 balances GLiNER accuracy vs total processing time."""
+        chunk_size=4000 keeps total time under MCP 60s timeout for ~20-page docs."""
         if len(text) <= chunk_size:
             return self.analyzer.analyze(text=text, entities=SUPPORTED_ENTITIES, language=language)
 
@@ -1525,7 +1594,10 @@ class PIIEngine:
                                 t = f"<u>{t}</u>"
                             runs_html.append(t)
                     elif child_tag == 'br':
-                        runs_html.append('<br>')
+                        # Only textWrapping (or no type) = \n. Page/column breaks = empty.
+                        br_type = child.get(f'{{{_wns}}}type')
+                        if br_type is None or br_type == 'textWrapping':
+                            runs_html.append('<br>')
                     elif child_tag in ('tab', 'ptab'):
                         runs_html.append('&#9;')
                     elif child_tag == 'cr':

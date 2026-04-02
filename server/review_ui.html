@@ -451,18 +451,22 @@ function renderDocument() {
   // Each segment: {start, end, entity: null|obj, bold, italic, underline}
   const segments = buildSegments(allEntities);
 
-  // If block structure available, wrap in block tags
-  if (hasHtml && blockMap.length > 0) {
-    let html = '';
-    for (const block of blockMap) {
-      html += `<${block.tag}>`;
-      html += renderSegmentsRange(segments, block.start, block.end);
-      html += `</${block.tag}>`;
-    }
-    container.innerHTML = html;
-  } else {
-    container.innerHTML = renderSegmentsRange(segments, 0, originalText.length);
+  // Always split originalText by \n for paragraph boundaries — guaranteed to
+  // match entity positions.  Use blockMap only for tag names (p/h1/h2/...).
+  const paragraphs = originalText.split('\n');
+  let html = '';
+  let offset = 0;
+  for (let pi = 0; pi < paragraphs.length; pi++) {
+    const para = paragraphs[pi];
+    const start = offset;
+    const end = offset + para.length;
+    const tag = (hasHtml && blockMap[pi] && blockMap[pi].tag) || 'p';
+    html += `<${tag}>`;
+    html += renderSegmentsRange(segments, start, end);
+    html += `</${tag}>`;
+    offset = end + 1; // +1 for the \n separator
   }
+  container.innerHTML = html;
 }
 
 function buildSegments(allEntities) {
