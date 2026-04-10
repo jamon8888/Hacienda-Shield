@@ -35,3 +35,35 @@ class TestDEPatterns:
         # May or may not match depending on recognizer; don't fail hard
         if not tax:
             pytest.skip("DE Tax ID pattern not matched (may need specific format)")
+
+
+class TestFRLegal:
+    def test_siret(self, engine):
+        entities = engine.detect("SIRET de l'établissement: 542 107 651 00012", "en")
+        hits = [e for e in entities if e.get("type") == "FR_SIRET"]
+        assert len(hits) >= 1, f"FR_SIRET not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_siren_not_inside_siret(self, engine):
+        entities = engine.detect("SIRET: 542 107 651 00012", "en")
+        siren = [e for e in entities if e.get("type") == "FR_SIREN"]
+        assert len(siren) == 0, f"FR_SIREN must not fire inside a SIRET. Got: {siren}"
+
+    def test_siren_standalone(self, engine):
+        entities = engine.detect("Numéro SIREN de la société: 542 107 651", "en")
+        hits = [e for e in entities if e.get("type") == "FR_SIREN"]
+        assert len(hits) >= 1, f"FR_SIREN standalone not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_rg(self, engine):
+        entities = engine.detect("Dossier RG numéro 24/08751 au tribunal de Paris", "en")
+        hits = [e for e in entities if e.get("type") == "FR_RG"]
+        assert len(hits) >= 1, f"FR_RG not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_rcs(self, engine):
+        entities = engine.detect("Immatriculée au RCS de Paris 542 107 651", "en")
+        hits = [e for e in entities if e.get("type") == "FR_RCS"]
+        assert len(hits) >= 1, f"FR_RCS not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_toque(self, engine):
+        entities = engine.detect("Maître Durant, toque D435 au barreau de Paris", "en")
+        hits = [e for e in entities if e.get("type") == "FR_TOQUE"]
+        assert len(hits) >= 1, f"FR_TOQUE not detected. Got: {[e['type'] for e in entities]}"

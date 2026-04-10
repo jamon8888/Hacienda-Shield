@@ -371,6 +371,8 @@ SUPPORTED_ENTITIES = [
     "ES_DNI", "ES_NIE",
     "CY_TIC", "CY_ID_CARD",
     "MEDICAL_LICENSE",
+    # Legal (France)
+    "FR_SIRET", "FR_SIREN", "FR_RCS", "FR_RG", "FR_NUMERO_PARQUET", "FR_TOQUE",
 ]
 
 TAG_NAMES = {
@@ -389,6 +391,8 @@ TAG_NAMES = {
     "ES_DNI": "ES_DNI", "ES_NIE": "ES_NIE",
     "CY_TIC": "CY_TIC", "CY_ID_CARD": "CY_ID",
     "MEDICAL_LICENSE": "MED_LIC",
+    "FR_SIRET": "FR_SIRET", "FR_SIREN": "FR_SIREN", "FR_RCS": "FR_RCS",
+    "FR_RG": "FR_RG", "FR_NUMERO_PARQUET": "FR_PARQUET", "FR_TOQUE": "FR_TOQUE",
 }
 
 

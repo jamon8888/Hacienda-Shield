@@ -264,4 +264,68 @@ def _build_recognizers():
     # Too broad ([A-Z0-9]{8,16} matches everything).
     # Use country-specific recognizers instead (UK_DRIVING_LICENCE, etc.)
 
+    # ================================================================
+    # France — Legal (Droit)
+    # ================================================================
+
+    # SIRET — 14 digits: SIREN(9) + NIC(5), space-tolerant
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_SIRET",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_siret", r"\b\d{3}\s?\d{3}\s?\d{3}\s?\d{5}\b", 0.2),
+        ],
+        context=["siret", "kbis", "etablissement", "établissement", "nic", "numéro siret", "numero siret"],
+    ))
+
+    # SIREN — 9 digits, NOT followed by 5 more digits (would be SIRET)
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_SIREN",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_siren", r"\b\d{3}\s?\d{3}\s?\d{3}\b(?!\s?\d{5})", 0.2),
+        ],
+        context=["siren", "entreprise", "societe", "société", "numéro siren", "numero siren", "identifiant"],
+    ))
+
+    # RCS — city name + space-formatted SIREN (e.g. "Paris 542 107 651")
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_RCS",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_rcs", r"\b[A-Z][a-z]+\s\d{3}\s?\d{3}\s?\d{3}\b", 0.6),
+        ],
+        context=["rcs", "registre du commerce", "registre des sociétés", "greffe", "immatriculée"],
+    ))
+
+    # RG — numéro de rôle général (e.g. 24/08751)
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_RG",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_rg", r"\b\d{2}/\d{4,6}\b", 0.7),
+        ],
+        context=["RG", "rôle général", "rôle", "dossier", "tribunal", "jugement", "affaire"],
+    ))
+
+    # Numéro de Parquet (e.g. 24/123456)
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_NUMERO_PARQUET",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_parquet", r"\b\d{2}/\d{6}\b", 0.65),
+        ],
+        context=["parquet", "procureur", "instruction", "réquisitoire", "ministère public"],
+    ))
+
+    # Toque — Paris Bar number (e.g. D435, P1203)
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_TOQUE",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_toque", r"\b[A-Z]\d{3,4}\b", 0.2),
+        ],
+        context=["toque", "barreau", "avocat", "batonnier", "bâtonnier", "barreau de Paris", "inscrit au barreau"],
+    ))
+
     return recognizers
