@@ -84,3 +84,69 @@ class TestFRLegal:
         entities = engine.detect("Maître Durant, toque D4350 au barreau de Paris", "en")
         hits = [e for e in entities if e.get("type") == "FR_TOQUE"]
         assert len(hits) >= 1, f"FR_TOQUE not detected. Got: {[e['type'] for e in entities]}"
+
+
+class TestFRHealth:
+    def test_rpps(self, engine):
+        entities = engine.detect("Médecin prescripteur RPPS: 10003456789", "en")
+        hits = [e for e in entities if e.get("type") == "FR_RPPS"]
+        assert len(hits) >= 1, f"FR_RPPS not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_adeli(self, engine):
+        entities = engine.detect("Numéro ADELI du kinésithérapeute: 123456789", "en")
+        hits = [e for e in entities if e.get("type") == "FR_ADELI"]
+        assert len(hits) >= 1, f"FR_ADELI not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_finess(self, engine):
+        entities = engine.detect("Numéro FINESS de l'établissement: 750056489", "en")
+        hits = [e for e in entities if e.get("type") == "FR_FINESS"]
+        assert len(hits) >= 1, f"FR_FINESS not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_cps_card(self, engine):
+        entities = engine.detect("Carte CPS du professionnel de santé: 80012345678901234567", "en")
+        hits = [e for e in entities if e.get("type") == "FR_CPS_CARD"]
+        assert len(hits) >= 1, f"FR_CPS_CARD not detected. Got: {[e['type'] for e in entities]}"
+
+
+class TestFRFinance:
+    def test_amf_gp(self, engine):
+        entities = engine.detect("Société agréée AMF sous le numéro GP-12345", "en")
+        hits = [e for e in entities if e.get("type") == "FR_AMF"]
+        assert len(hits) >= 1, f"FR_AMF GP- not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_amf_cif(self, engine):
+        entities = engine.detect("Conseiller en investissements financiers CIF-00421 agréé AMF", "en")
+        hits = [e for e in entities if e.get("type") == "FR_AMF"]
+        assert len(hits) >= 1, f"FR_AMF CIF- not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_lei(self, engine):
+        entities = engine.detect("Identifiant LEI: 969500T3MBS4SQAMHJ45", "en")
+        hits = [e for e in entities if e.get("type") == "FR_LEI"]
+        assert len(hits) >= 1, f"FR_LEI not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_bban_spaced(self, engine):
+        entities = engine.detect("RIB compte bancaire: 30004 00831 00012345678 94", "en")
+        hits = [e for e in entities if e.get("type") == "FR_BBAN"]
+        assert len(hits) >= 1, f"FR_BBAN (spaced) not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_bban_dashed(self, engine):
+        entities = engine.detect("Domiciliation bancaire RIB: 30004-00831-00012345678-94", "en")
+        hits = [e for e in entities if e.get("type") == "FR_BBAN"]
+        assert len(hits) >= 1, f"FR_BBAN (dashed) not detected. Got: {[e['type'] for e in entities]}"
+
+
+class TestFRAccounting:
+    def test_ape_naf(self, engine):
+        entities = engine.detect("Code APE de l'entreprise: 6201Z", "en")
+        hits = [e for e in entities if e.get("type") == "FR_APE_NAF"]
+        assert len(hits) >= 1, f"FR_APE_NAF not detected. Got: {[e['type'] for e in entities]}"
+
+    def test_siret_accounting_context(self, engine):
+        entities = engine.detect("Expert-comptable référence SIRET client: 542 107 651 00012", "en")
+        hits = [e for e in entities if e.get("type") == "FR_SIRET"]
+        assert len(hits) >= 1, f"FR_SIRET in accounting context not detected."
+
+    def test_siren_not_inside_siret_accounting(self, engine):
+        entities = engine.detect("Numéro SIRET: 542 107 651 00012", "en")
+        siren = [e for e in entities if e.get("type") == "FR_SIREN"]
+        assert len(siren) == 0, f"FR_SIREN must not fire inside SIRET. Got: {siren}"

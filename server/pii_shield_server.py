@@ -373,6 +373,12 @@ SUPPORTED_ENTITIES = [
     "MEDICAL_LICENSE",
     # Legal (France)
     "FR_SIRET", "FR_SIREN", "FR_RCS", "FR_RG", "FR_NUMERO_PARQUET", "FR_TOQUE",
+    # Health (France)
+    "FR_RPPS", "FR_ADELI", "FR_FINESS", "FR_CPS_CARD", "FR_NDA",
+    # Finance (France)
+    "FR_AMF", "FR_LEI", "FR_BBAN", "FR_ACPR",
+    # Accounting (France)
+    "FR_APE_NAF", "FR_OEC",
 ]
 
 TAG_NAMES = {
@@ -393,6 +399,10 @@ TAG_NAMES = {
     "MEDICAL_LICENSE": "MED_LIC",
     "FR_SIRET": "FR_SIRET", "FR_SIREN": "FR_SIREN", "FR_RCS": "FR_RCS",
     "FR_RG": "FR_RG", "FR_NUMERO_PARQUET": "FR_PARQUET", "FR_TOQUE": "FR_TOQUE",
+    "FR_RPPS": "FR_RPPS", "FR_ADELI": "FR_ADELI", "FR_FINESS": "FR_FINESS",
+    "FR_CPS_CARD": "FR_CPS", "FR_NDA": "FR_NDA",
+    "FR_AMF": "FR_AMF", "FR_LEI": "LEI", "FR_BBAN": "FR_BBAN", "FR_ACPR": "FR_ACPR",
+    "FR_APE_NAF": "FR_NAF", "FR_OEC": "FR_OEC",
 }
 
 

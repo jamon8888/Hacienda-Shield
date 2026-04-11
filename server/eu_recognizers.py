@@ -328,4 +328,106 @@ def _build_recognizers():
         context=["toque", "barreau", "avocat", "batonnier", "bâtonnier", "barreau de Paris", "inscrit au barreau"],
     ))
 
+    # ================================================================
+    # France — Health (Santé)
+    # ================================================================
+
+    # RPPS — Répertoire Partagé des Professionnels de Santé, 11 digits
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_RPPS",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_rpps", r"\b\d{11}\b", 0.2),
+        ],
+        context=["rpps", "medecin", "médecin", "infirmier", "prescripteur",
+                 "professionnel de sante", "professionnel de santé",
+                 "repertoire partage", "répertoire partagé"],
+    ))
+
+    # ADELI — numéro para-médical, 9 digits
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_ADELI",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_adeli", r"\b\d{9}\b", 0.7),
+        ],
+        context=["adeli", "paramedical", "paramédical", "auxiliaire",
+                 "kinesitherapeute", "kinésithérapeute", "orthophoniste",
+                 "pedicure", "pédicure", "ergotherapeute", "ergothérapeute"],
+    ))
+
+    # FINESS — numéro établissement de santé, 9 digits
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_FINESS",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_finess", r"\b\d{9}\b", 0.65),
+        ],
+        context=["finess", "etablissement", "établissement", "clinique",
+                 "hopital", "hôpital", "ehpad", "maison de sante", "maison de santé"],
+    ))
+
+    # CPS Card — Carte de Professionnel de Santé, 20 digits starting with 8 (ANS/ASIP Santé)
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_CPS_CARD",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_cps", r"\b8\d{19}\b", 0.8),
+        ],
+        context=["carte cps", "cps", "professionnel de sante", "professionnel de santé",
+                 "asip sante", "asip santé", "ans"],
+    ))
+
+    # ================================================================
+    # France — Finance (AMF / ACPR)
+    # ================================================================
+
+    # AMF registration number — GP-, SP-, CIF-, AIFI- prefix + 5 digits
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_AMF",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_amf", r"\b(GP|SP|CIF|AIFI)-\d{5}\b", 0.85),
+        ],
+        context=["AMF", "gestionnaire", "societe de portefeuille", "société de portefeuille",
+                 "CIF", "conseiller en investissements", "AIFI", "agree AMF", "agréé AMF"],
+    ))
+
+    # LEI — Legal Entity Identifier, ISO 17442, 20 chars: 18 alphanumeric + 2 check digits
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_LEI",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_lei", r"\b[A-Z0-9]{18}\d{2}\b", 0.75),
+        ],
+        context=["LEI", "identifiant entite juridique", "identifiant entité juridique",
+                 "legal entity identifier", "ISO 17442", "identifiant LEI"],
+    ))
+
+    # BBAN — French domestic bank account (RIB format: 5+5+11+2), space or dash tolerant
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_BBAN",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_bban", r"\b\d{5}[\s-]?\d{5}[\s-]?\d{11}[\s-]?\d{2}\b", 0.2),
+        ],
+        context=["RIB", "compte bancaire", "domiciliation bancaire",
+                 "releve d'identite", "relevé d'identité", "numero de compte", "numéro de compte"],
+    ))
+
+    # ================================================================
+    # France — Accounting (Comptabilité)
+    # ================================================================
+
+    # APE/NAF — code activité INSEE, 4 digits + 1 uppercase letter (e.g. 6201Z)
+    recognizers.append(PatternRecognizer(
+        supported_entity="FR_APE_NAF",
+        supported_language="en",
+        patterns=[
+            Pattern("fr_ape_naf", r"\b\d{4}[A-Z]\b", 0.6),
+        ],
+        context=["APE", "NAF", "code activite", "code activité", "INSEE",
+                 "code APE", "code NAF", "activite principale", "activité principale"],
+    ))
+
     return recognizers
