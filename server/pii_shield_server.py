@@ -379,6 +379,11 @@ SUPPORTED_ENTITIES = [
     "FR_AMF", "FR_LEI", "FR_BBAN", "FR_ACPR",
     # Accounting (France)
     "FR_APE_NAF", "FR_OEC",
+    # Semantic — GLiNER zero-shot only (no regex)
+    "MEDICAL_CONDITION", "MEDICATION", "MEDICAL_PROCEDURE",
+    "LEGAL_FILE_REF", "LEGAL_PRIVILEGE", "FR_BARREAU",
+    "FINANCIAL_AMOUNT", "FINANCIAL_INSTRUMENT",
+    "INVOICE_REF", "CLIENT_REF",
 ]
 
 TAG_NAMES = {
@@ -403,6 +408,12 @@ TAG_NAMES = {
     "FR_CPS_CARD": "FR_CPS", "FR_NDA": "FR_NDA",
     "FR_AMF": "FR_AMF", "FR_LEI": "LEI", "FR_BBAN": "FR_BBAN", "FR_ACPR": "FR_ACPR",
     "FR_APE_NAF": "FR_NAF", "FR_OEC": "FR_OEC",
+    "MEDICAL_CONDITION": "MED_COND", "MEDICATION": "MEDICATION",
+    "MEDICAL_PROCEDURE": "MED_PROC",
+    "LEGAL_FILE_REF": "LEGAL_REF", "LEGAL_PRIVILEGE": "LEGAL_PRIV",
+    "FR_BARREAU": "FR_BARREAU",
+    "FINANCIAL_AMOUNT": "FIN_AMOUNT", "FINANCIAL_INSTRUMENT": "FIN_INST",
+    "INVOICE_REF": "INVOICE", "CLIENT_REF": "CLIENT_REF",
 }
 
 
@@ -590,10 +601,43 @@ class PIIEngine:
                     "url": "URL",
                     "username": "URL",
                     # Medical
-                    "medical condition": "MEDICAL_LICENSE",
+                    "medical condition": "MEDICAL_CONDITION",
                     "health insurance id number": "UK_NHS",
                     # Date
                     "date of birth": "DATE_TIME",
+                    # Health — semantic detection (no regex possible for these)
+                    "medical diagnosis": "MEDICAL_CONDITION",
+                    "health condition": "MEDICAL_CONDITION",
+                    "disease": "MEDICAL_CONDITION",
+                    "prescribed medication": "MEDICATION",
+                    "drug name": "MEDICATION",
+                    "medical procedure": "MEDICAL_PROCEDURE",
+                    "patient identifier": "FR_NDA",
+                    "RPPS number": "FR_RPPS",
+                    "ADELI number": "FR_ADELI",
+                    "FINESS number": "FR_FINESS",
+                    # Legal — privilege is semantic
+                    "case file number": "LEGAL_FILE_REF",
+                    "court reference": "LEGAL_FILE_REF",
+                    "numéro de rôle": "FR_RG",
+                    "client instruction": "LEGAL_PRIVILEGE",
+                    "legal opinion": "LEGAL_PRIVILEGE",
+                    "bar registration number": "FR_BARREAU",
+                    # Finance — ACPR and OEC have no reliable regex
+                    "account balance": "FINANCIAL_AMOUNT",
+                    "salary amount": "FINANCIAL_AMOUNT",
+                    "investment portfolio": "FINANCIAL_INSTRUMENT",
+                    "AMF registration number": "FR_AMF",
+                    "LEI code": "FR_LEI",
+                    "SIRET number": "FR_SIRET",
+                    "SIREN number": "FR_SIREN",
+                    "ACPR registration number": "FR_ACPR",
+                    "bank routing code": "FR_BBAN",
+                    # Accounting — OEC has no reliable regex
+                    "invoice number": "INVOICE_REF",
+                    "client file number": "CLIENT_REF",
+                    "NAF code": "FR_APE_NAF",
+                    "accounting professional number": "FR_OEC",
                 },
                 flat_ner=False,
                 multi_label=True,
