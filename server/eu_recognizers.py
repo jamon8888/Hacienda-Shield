@@ -283,7 +283,7 @@ def _build_recognizers():
         supported_entity="FR_SIREN",
         supported_language="en",
         patterns=[
-            Pattern("fr_siren", r"\b\d{3}\s?\d{3}\s?\d{3}\b(?!\s?\d{5})", 0.2),
+            Pattern("fr_siren", r"\b\d{3}\s?\d{3}\s?\d{3}\b(?!\s{0,2}\d{5})", 0.2),
         ],
         context=["siren", "entreprise", "societe", "société", "numéro siren", "numero siren", "identifiant"],
     ))
@@ -303,7 +303,7 @@ def _build_recognizers():
         supported_entity="FR_RG",
         supported_language="en",
         patterns=[
-            Pattern("fr_rg", r"\b\d{2}/\d{4,6}\b", 0.7),
+            Pattern("fr_rg", r"\b\d{2}/\d{4,5}\b", 0.7),
         ],
         context=["RG", "rôle général", "rôle", "dossier", "tribunal", "jugement", "affaire"],
     ))
@@ -323,7 +323,7 @@ def _build_recognizers():
         supported_entity="FR_TOQUE",
         supported_language="en",
         patterns=[
-            Pattern("fr_toque", r"\b[A-Z]\d{3,4}\b", 0.2),
+            Pattern("fr_toque", r"\b[A-Z]\d{4}\b", 0.2),
         ],
         context=["toque", "barreau", "avocat", "batonnier", "bâtonnier", "barreau de Paris", "inscrit au barreau"],
     ))

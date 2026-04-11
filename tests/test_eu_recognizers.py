@@ -48,6 +48,11 @@ class TestFRLegal:
         siren = [e for e in entities if e.get("type") == "FR_SIREN"]
         assert len(siren) == 0, f"FR_SIREN must not fire inside a SIRET. Got: {siren}"
 
+    def test_siren_not_inside_siret_double_space(self, engine):
+        entities = engine.detect("SIRET: 542 107 651  00012", "en")
+        siren = [e for e in entities if e.get("type") == "FR_SIREN"]
+        assert len(siren) == 0, f"FR_SIREN fired on double-space SIRET. Got: {siren}"
+
     def test_siren_standalone(self, engine):
         entities = engine.detect("Numéro SIREN de la société: 542 107 651", "en")
         hits = [e for e in entities if e.get("type") == "FR_SIREN"]
@@ -63,7 +68,19 @@ class TestFRLegal:
         hits = [e for e in entities if e.get("type") == "FR_RCS"]
         assert len(hits) >= 1, f"FR_RCS not detected. Got: {[e['type'] for e in entities]}"
 
+    def test_rg_vs_parquet_no_overlap(self, engine):
+        entities = engine.detect("Réquisitoire du parquet numéro 24/123456", "en")
+        rg = [e for e in entities if e.get("type") == "FR_RG"]
+        parquet = [e for e in entities if e.get("type") == "FR_NUMERO_PARQUET"]
+        assert len(parquet) >= 1
+        assert len(rg) == 0, f"FR_RG must not fire on 6-digit parquet number. Got: {rg}"
+
+    def test_parquet(self, engine):
+        entities = engine.detect("Réquisitoire du parquet numéro 24/123456", "en")
+        hits = [e for e in entities if e.get("type") == "FR_NUMERO_PARQUET"]
+        assert len(hits) >= 1, f"FR_NUMERO_PARQUET not detected. Got: {[e['type'] for e in entities]}"
+
     def test_toque(self, engine):
-        entities = engine.detect("Maître Durant, toque D435 au barreau de Paris", "en")
+        entities = engine.detect("Maître Durant, toque D4350 au barreau de Paris", "en")
         hits = [e for e in entities if e.get("type") == "FR_TOQUE"]
         assert len(hits) >= 1, f"FR_TOQUE not detected. Got: {[e['type'] for e in entities]}"
