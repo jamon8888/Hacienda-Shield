@@ -344,24 +344,26 @@ def _build_recognizers():
                  "repertoire partage", "répertoire partagé"],
     ))
 
-    # ADELI — numéro para-médical, 9 digits
+    # ADELI — numéro para-médical, 9 digits.
+    # Bare 9-digit spans are too ambiguous, so rely on context boosting.
     recognizers.append(PatternRecognizer(
         supported_entity="FR_ADELI",
         supported_language="en",
         patterns=[
-            Pattern("fr_adeli", r"\b\d{9}\b", 0.7),
+            Pattern("fr_adeli", r"\b\d{9}\b", 0.49),
         ],
         context=["adeli", "paramedical", "paramédical", "auxiliaire",
                  "kinesitherapeute", "kinésithérapeute", "orthophoniste",
                  "pedicure", "pédicure", "ergotherapeute", "ergothérapeute"],
     ))
 
-    # FINESS — numéro établissement de santé, 9 digits
+    # FINESS — numéro établissement de santé, 9 digits.
+    # Bare 9-digit spans are too ambiguous, so rely on context boosting.
     recognizers.append(PatternRecognizer(
         supported_entity="FR_FINESS",
         supported_language="en",
         patterns=[
-            Pattern("fr_finess", r"\b\d{9}\b", 0.65),
+            Pattern("fr_finess", r"\b\d{9}\b", 0.49),
         ],
         context=["finess", "etablissement", "établissement", "clinique",
                  "hopital", "hôpital", "ehpad", "maison de sante", "maison de santé"],
