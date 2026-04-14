@@ -107,6 +107,26 @@ class TestFRHealth:
         hits = [e for e in entities if e.get("type") == "FR_CPS_CARD"]
         assert len(hits) >= 1, f"FR_CPS_CARD not detected. Got: {[e['type'] for e in entities]}"
 
+    def test_adeli_not_on_bare_number(self, engine):
+        """Bare 9-digit number without ADELI context must NOT be redacted."""
+        entities = engine.detect("Transaction reference 123456789", "en")
+        adeli = [e for e in entities if e.get("type") == "FR_ADELI"]
+        assert len(adeli) == 0, f"FR_ADELI fired without context. Got: {adeli}"
+
+    def test_finess_not_on_bare_number(self, engine):
+        """Bare 9-digit number without FINESS context must NOT be redacted."""
+        entities = engine.detect("Order number 987654321", "en")
+        finess = [e for e in entities if e.get("type") == "FR_FINESS"]
+        assert len(finess) == 0, f"FR_FINESS fired without context. Got: {finess}"
+
+    def test_finess_wins_over_adeli_in_finess_context(self, engine):
+        """A 9-digit number in FINESS context must be tagged FR_FINESS, not FR_ADELI."""
+        entities = engine.detect("FINESS de l'hôpital: 750056489", "en")
+        adeli = [e for e in entities if e.get("type") == "FR_ADELI"]
+        assert len(adeli) == 0, f"FR_ADELI fired on FINESS context (score bug). Got: {adeli}"
+        finess = [e for e in entities if e.get("type") == "FR_FINESS"]
+        assert len(finess) >= 1, f"FR_FINESS not detected in FINESS context. Got: {[e['type'] for e in entities]}"
+
 
 class TestFRFinance:
     def test_amf_gp(self, engine):
