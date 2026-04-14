@@ -3,29 +3,29 @@ name: pii-contract-analyze
 description: "Universal legal document processor with PII anonymization. Anonymize → Work → Deanonymize. Modes: MEMO (legal analysis), REDLINE (tracked changes in contract), SUMMARY (brief overview), COMPARISON (diff two docs), BULK (up to 5 files). Supports .docx and .pdf input. Trigger for: contract review, risk analysis, compliance check, GDPR review, clause analysis, tracked changes, redline, 'anonymize', 'pii shield'. If user uploads contract/NDA/DSAR/HR doc — USE THIS SKILL. If user says 'skip pii' or 'don't anonymize' — skip anonymization and work directly."
 ---
 
-# PII Shield — Universal Legal Document Processor
+# Hacienda Shield — Universal Legal Document Processor
 
 Anonymize → Work → Deanonymize → Deliver. Claude NEVER sees raw PII at any stage.
 
 ## CRITICAL: PII never flows through Claude
 
-**File handling**: The user must connect a folder (not attach the file directly to the message). When a file is attached to a Cowork message, its content is rendered and sent to the API as part of the prompt — Claude sees the raw data before PII Shield can process it. When a folder is connected, Claude only sees the file path and calls `anonymize_file(path)` — the MCP server on the host reads and anonymizes the file locally. PII never enters Claude's context.
+**File handling**: The user must connect a folder (not attach the file directly to the message). When a file is attached to a Cowork message, its content is rendered and sent to the API as part of the prompt — Claude sees the raw data before Hacienda Shield can process it. When a folder is connected, Claude only sees the file path and calls `anonymize_file(path)` — the MCP server on the host reads and anonymizes the file locally. PII never enters Claude's context.
 
-**If the user attaches a file directly**: Warn them politely: "For full PII protection, please connect the folder containing your document instead of attaching it directly. When a file is attached to a message, its content is included in the API request before PII Shield can anonymize it. I can still process it, but the privacy guarantee is stronger when you connect the folder."
+**If the user attaches a file directly**: Warn them politely: "For full PII protection, please connect the folder containing your document instead of attaching it directly. When a file is attached to a message, its content is included in the API request before Hacienda Shield can anonymize it. I can still process it, but the privacy guarantee is stronger when you connect the folder."
 
 - `anonymize_file` reads the file on the host, anonymizes locally, writes result to disk, returns only `output_path` + `session_id` to Claude. Claude reads the anonymized text from the output file.
 - `deanonymize_*` tools write results to LOCAL FILES and return only the file path
 - `get_mapping` returns only placeholder keys and types — no real values
 - **ABSOLUTE BAN**: Claude must NEVER read, open, cat, head, pandoc, or in any way access the content of deanonymized/restored files. Not to "verify", not to "check formatting", not to "validate" — NEVER. These files contain real PII. Just give the user the file path and STOP. Any "verification" of deanonymized output is a PII leak.
 - Claude must NEVER read the source file (via Read tool, pandoc, python, bash, etc.) BEFORE or INSTEAD OF anonymization — always use `anonymize_file(path)` first
-- If an anonymize tool times out or fails with a NON-"tool not found" error — retry once. If it still fails, tell the user PII Shield is unavailable and ask whether to proceed without anonymization or abort. NEVER fall back to reading the raw file.
+- If an anonymize tool times out or fails with a NON-"tool not found" error — retry once. If it still fails, tell the user Hacienda Shield is unavailable and ask whether to proceed without anonymization or abort. NEVER fall back to reading the raw file.
 - **NEVER** use `anonymize_text` or `scan_text` — these take raw text as input which means PII passes through the API. The ONLY exception is if the user explicitly pastes text into the chat (PII is already in the conversation).
 
 ## Startup
 
-PII Shield is an MCP extension that auto-installs its dependencies on first launch. On first use in a session, the server installs packages (~2-5 minutes on first launch) and loads NER models (~30-60 seconds on subsequent launches when packages are already installed).
+Hacienda Shield is an MCP extension that auto-installs its dependencies on first launch. On first use in a session, the server installs packages (~2-5 minutes on first launch) and loads NER models (~30-60 seconds on subsequent launches when packages are already installed).
 
-**IMPORTANT**: PII Shield tools (`mcp__PII_Shield__*`) may NOT appear in your available tools immediately. On first launch, the server installs heavy dependencies (PyTorch, spaCy, GLiNER) which takes several minutes. This is NORMAL. Do NOT conclude that PII Shield is "not installed" or "not connected". Do NOT tell the user it will take "30 seconds" — first-time installation takes 2-5 minutes.
+**IMPORTANT**: Hacienda Shield tools (`mcp__Hacienda_Shield__*`) may NOT appear in your available tools immediately. On first launch, the server installs heavy dependencies (PyTorch, spaCy, GLiNER) which takes several minutes. This is NORMAL. Do NOT conclude that Hacienda Shield is "not installed" or "not connected". Do NOT tell the user it will take "30 seconds" — first-time installation takes 2-5 minutes.
 
 ### Startup procedure
 
@@ -35,19 +35,19 @@ PII Shield is an MCP extension that auto-installs its dependencies on first laun
 - Plan your analysis approach
 - This prep work takes ~15-30 seconds — usually enough for the server to finish loading
 
-**Step 2 — Check PII Shield readiness** (after prep work):
-1. Call `mcp__PII_Shield__list_entities`.
+**Step 2 — Check Hacienda Shield readiness** (after prep work):
+1. Call `mcp__Hacienda_Shield__list_entities`.
    - If `"status": "ready"` — proceed to anonymization.
    - If `"status": "loading"` — tell the user what's happening (show `message` field, e.g. "Installing dependencies..." or "Loading GLiNER model..."). Then **wait `retry_after_sec` seconds** (use `sleep` command), then call `list_entities` again. Repeat up to 10 times. Show progress updates to the user when the `message` changes. The server returns `retry_after_sec` dynamically: ~25 seconds during the first 3 minutes of boot, then ~10 seconds after.
-   - If `"status": "error"` — report the error to the user and ask them to restart PII Shield extension.
+   - If `"status": "error"` — report the error to the user and ask them to restart Hacienda Shield extension.
 2. If the tool is not found ("No such tool" error) — this means tools haven't appeared yet:
-   - Tell user: **"PII Shield is still starting up. Please send any message so I can connect."**
+   - Tell user: **"Hacienda Shield is still starting up. Please send any message so I can connect."**
    - **STOP your turn and wait** for user's next message. After they respond, retry from step 1.
 
 **RULES**:
 - "loading" status → use `sleep` for `retry_after_sec` seconds between retries, show progress to user
 - "No such tool" → STOP, ask user to send message (sleep won't help — tool list only refreshes on new message)
-- Do NOT skip PII Shield. Do NOT offer to "work without anonymization".
+- Do NOT skip Hacienda Shield. Do NOT offer to "work without anonymization".
 
 ### Long document handling (chunked processing)
 
@@ -81,23 +81,23 @@ This works with ANY connected folder location — no configuration needed. The m
 
 **Fallback**: If `resolve_path` fails, use `find_file(filename)` (requires configured work_dir) or ask the user for the full host path.
 
-All PII Shield tools are registered as MCP tools with prefix `mcp__PII_Shield__`.
+All Hacienda Shield tools are registered as MCP tools with prefix `mcp__Hacienda_Shield__`.
 
 ## Available MCP tools
 
 | MCP tool name | Parameters | Returns to Claude |
 |---|---|---|
-| `mcp__PII_Shield__anonymize_file` | file_path, language, prefix, **review_session_id** | output_path (.txt) + session_id + output_dir + docx_output_path (.docx, for .docx input only). For long docs: returns `status: "chunked"` with session_id and total_chunks. |
-| `mcp__PII_Shield__anonymize_next_chunk` | session_id | Progress: processed_chunks, total_chunks, progress_pct, entities_so_far |
-| `mcp__PII_Shield__get_full_anonymized_text` | session_id | output_path, session_id, output_dir, docx_output_path (same as anonymize_file) |
-| `mcp__PII_Shield__resolve_path` | filename, marker, vm_dir | host_path, host_dir (zero-config VM-to-host path resolution) |
-| `mcp__PII_Shield__deanonymize_text` | text, session_id, output_path | **File path only** (takes anonymized text, writes deanonymized file) |
-| `mcp__PII_Shield__deanonymize_docx` | file_path, session_id | **File path only** |
-| `mcp__PII_Shield__get_mapping` | session_id | Placeholder keys + types only |
-| `mcp__PII_Shield__list_entities` | — | Server status and config |
-| `mcp__PII_Shield__find_file` | filename | Full host path(s) — searches configured work_dir only (fallback) |
-| `mcp__PII_Shield__start_review` | session_id | URL of local review page |
-| `mcp__PII_Shield__get_review_status` | session_id | **status + has_changes only** (no PII or override details) |
+| `mcp__Hacienda_Shield__anonymize_file` | file_path, language, prefix, **review_session_id** | output_path (.txt) + session_id + output_dir + docx_output_path (.docx, for .docx input only). For long docs: returns `status: "chunked"` with session_id and total_chunks. |
+| `mcp__Hacienda_Shield__anonymize_next_chunk` | session_id | Progress: processed_chunks, total_chunks, progress_pct, entities_so_far |
+| `mcp__Hacienda_Shield__get_full_anonymized_text` | session_id | output_path, session_id, output_dir, docx_output_path (same as anonymize_file) |
+| `mcp__Hacienda_Shield__resolve_path` | filename, marker, vm_dir | host_path, host_dir (zero-config VM-to-host path resolution) |
+| `mcp__Hacienda_Shield__deanonymize_text` | text, session_id, output_path | **File path only** (takes anonymized text, writes deanonymized file) |
+| `mcp__Hacienda_Shield__deanonymize_docx` | file_path, session_id | **File path only** |
+| `mcp__Hacienda_Shield__get_mapping` | session_id | Placeholder keys + types only |
+| `mcp__Hacienda_Shield__list_entities` | — | Server status and config |
+| `mcp__Hacienda_Shield__find_file` | filename | Full host path(s) — searches configured work_dir only (fallback) |
+| `mcp__Hacienda_Shield__start_review` | session_id | URL of local review page |
+| `mcp__Hacienda_Shield__get_review_status` | session_id | **status + has_changes only** (no PII or override details) |
 
 **DO NOT USE these tools** (they exist on the server but must not be called for file workflows):
 - `anonymize_text` — sends raw text through the API. Only acceptable if user pasted text into chat.
@@ -142,7 +142,7 @@ After every `anonymize_file` call, offer the user a review step. The review page
 - **See** the full document with color-coded entity highlights (persons in blue, organizations in purple, locations in green, contacts in orange)
 - **Remove** false positives by clicking on highlighted entities
 - **Add** missed entities by selecting text and choosing the entity type
-- **Approve** when satisfied — sends overrides back to PII Shield server (localhost only)
+- **Approve** when satisfied — sends overrides back to Hacienda Shield server (localhost only)
 
 ### Important rules
 
@@ -182,7 +182,7 @@ Full legal memorandum with risk assessment. The default mode.
 2. Resolve host path: create marker → resolve_path(filename, marker) → host_path
    (See "File path resolution" section. Fallback: find_file or ask user)
 3. anonymize_file(file_path) → output_path, session_id, output_dir
-   All output files are in output_dir (pii_shield_<session_id>/ subfolder).
+   All output files are in output_dir (hacienda_shield_<session_id>/ subfolder).
    Read the anonymized text from output_path (the file on disk)
    (PII never leaves the host — only the path goes through the API)
 4. HITL Review: start_review(session_id) → offer review to user (see "Human-in-the-Loop Review" section)
@@ -210,7 +210,7 @@ Apply tracked changes to make the contract more favorable for the specified part
 2. Resolve host path: create marker → resolve_path(filename, marker) → host_path
    (See "File path resolution" section. Fallback: find_file or ask user)
 3. anonymize_file(file_path) → output_path (.txt), docx_output_path (.docx), output_dir, session_id
-   All output files are in output_dir (a pii_shield_<session_id>/ subfolder next to the source file).
+   All output files are in output_dir (a hacienda_shield_<session_id>/ subfolder next to the source file).
    Read the anonymized text from output_path for analysis.
    Keep docx_output_path — this is the anonymized .docx with original formatting (same placeholders as .txt).
 4. HITL Review: start_review(session_id) → offer review to user
@@ -266,7 +266,7 @@ Concise document summary — key parties, subject, term, financial terms, notabl
 2. Resolve host path: create marker → resolve_path(filename, marker) → host_path
    (See "File path resolution" section. Fallback: find_file or ask user)
 3. anonymize_file(file_path) → output_path, session_id, output_dir
-   All output files are in output_dir (pii_shield_<session_id>/ subfolder).
+   All output files are in output_dir (hacienda_shield_<session_id>/ subfolder).
    Read the anonymized text from output_path (the file on disk)
 4. HITL Review: start_review(session_id) → offer review to user
    If user made changes: anonymize_file(file_path, review_session_id=session_id) → new output_path, NEW session_id
@@ -354,7 +354,7 @@ Just anonymize and return the anonymized file. No analysis.
 2. Resolve host path: create marker → resolve_path(filename, marker) → host_path
    (See "File path resolution" section. Fallback: find_file or ask user)
 3. anonymize_file(file_path) → output_path, session_id, output_dir
-   All output files are in output_dir (pii_shield_<session_id>/ subfolder).
+   All output files are in output_dir (hacienda_shield_<session_id>/ subfolder).
    Read the anonymized text from output_path (the file on disk)
 4. HITL Review: start_review(session_id) → offer review to user
    If user made changes: anonymize_file(file_path, review_session_id=session_id) → new output_path, NEW session_id
@@ -372,7 +372,7 @@ Just anonymize and return the anonymized file. No analysis.
 
 ### How to determine the host file path
 
-PII Shield runs on the **HOST machine**, not in the Cowork sandbox. `anonymize_file` needs the Windows/Mac/Linux host path.
+Hacienda Shield runs on the **HOST machine**, not in the Cowork sandbox. `anonymize_file` needs the Windows/Mac/Linux host path.
 
 **Step 1 — Marker-based resolution** (primary method, zero-config):
 Create a unique marker file next to the target file, then call `resolve_path`:
@@ -389,12 +389,12 @@ ls /mnt/.virtiofs-root/shared/
 ```
 This shows the host user's home folder structure. Derive the host path from the mount structure.
 
-**Step 3 — Use `find_file(filename)`** (fallback): Searches the configured working directory (Settings > Extensions > PII Shield). If found, use the returned path.
+**Step 3 — Use `find_file(filename)`** (fallback): Searches the configured working directory (Settings > Extensions > Hacienda Shield). If found, use the returned path.
 
 **Step 4 — Ask the user** (last resort): If all above fail, ask the user for the full host path.
 
 **Step 4 — Use `output_dir` for all subsequent files**:
-- `anonymize_file` returns `output_dir` like `C:\Users\User\Downloads\testtest\pii_shield_a1b2c3d4e5f6\`
+- `anonymize_file` returns `output_dir` like `C:\Users\User\Downloads\testtest\hacienda_shield_a1b2c3d4e5f6\`
 - This is the dedicated subfolder for this session — save all generated files here (tracked changes docx, etc.)
 - The parent of `output_dir` is the host working directory — use it to find other source files in the same folder
 
@@ -408,7 +408,7 @@ This shows the host user's home folder structure. Derive the host path from the 
 
 The `deanonymize_docx` tool runs on the HOST machine (Windows), not in the Linux VM. File paths must be Windows paths.
 
-**Rule**: All anonymized files are already in `output_dir` (a Windows path like `C:\Users\User\Downloads\testtest\pii_shield_abc123\`). Use paths from the `anonymize_file` response directly — they are already valid Windows paths.
+**Rule**: All anonymized files are already in `output_dir` (a Windows path like `C:\Users\User\Downloads\testtest\hacienda_shield_abc123\`). Use paths from the `anonymize_file` response directly — they are already valid Windows paths.
 
 **For files you create** (e.g., tracked changes docx saved in the sandbox):
 - Your sandbox file is at `/sessions/.../mnt/uploads/output_dir_name/tracked_changes.docx`

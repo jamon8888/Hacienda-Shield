@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Import chunking helpers
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
-from pii_shield_server import _split_paragraphs
+from hacienda_shield_server import _split_paragraphs
 
 
 class TestSplitParagraphs:
@@ -60,7 +60,7 @@ class TestChunkReassembly:
         anon = result["anonymized_text"]
 
         # Restore and verify round-trip integrity
-        from pii_shield_server import load_mapping
+        from hacienda_shield_server import load_mapping
         mapping = load_mapping(result["session_id"])
         restored = anon
         for ph, real in mapping.items():

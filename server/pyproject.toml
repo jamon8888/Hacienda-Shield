@@ -1,7 +1,7 @@
 [project]
-name = "pii-shield"
+name = "hacienda-shield"
 version = "1.0.0"
-description = "PII Shield MCP Server — GLiNER zero-shot NER for legal document PII detection, self-bootstrapping"
+description = "Hacienda Shield MCP Server — GLiNER zero-shot NER for legal document PII detection, self-bootstrapping"
 requires-python = ">=3.10"
 
 dependencies = [
@@ -14,6 +14,5 @@ dependencies = [
     "mcp[cli]>=1.0.0",
     "cryptography>=42.0.0",
 ]
-
 [project.scripts]
-pii-shield = "pii_shield_server:main"
+hacienda-shield = "hacienda_shield_server:main"

@@ -1,7 +1,7 @@
 """Tests for false positive filtering — stoplist and boundary cleanup."""
 
 import pytest
-from pii_shield_server import PIIEngine
+from hacienda_shield_server import PIIEngine
 
 
 class TestStoplist:

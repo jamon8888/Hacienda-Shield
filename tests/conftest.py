@@ -1,5 +1,5 @@
 """
-Shared fixtures for PII Shield tests.
+Shared fixtures for Hacienda Shield tests.
 
 Imports PIIEngine and helpers from the server module.
 The server module tries to import `mcp` at module level and create a FastMCP instance.
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 
 def _mock_mcp():
-    """Install a fake `mcp` package so pii_shield_server.py can be imported without it."""
+    """Install a fake `mcp` package so hacienda_shield_server.py can be imported without it."""
     if "mcp" in sys.modules:
         return  # already available (real or mocked)
 
@@ -56,7 +56,7 @@ sys.path.insert(0, str(SERVER_DIR))
 @pytest.fixture(scope="session")
 def engine():
     """Return an initialized PIIEngine instance (shared across all tests in session)."""
-    from pii_shield_server import PIIEngine, _engine_ready
+    from hacienda_shield_server import PIIEngine, _engine_ready
 
     # Mark engine as ready (skip background bootstrap wait)
     _engine_ready.set()

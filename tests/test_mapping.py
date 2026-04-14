@@ -9,7 +9,7 @@ from pathlib import Path
 class TestMappingPersistence:
     def test_save_and_load(self, engine):
         """Save a mapping and load it back."""
-        from pii_shield_server import save_mapping, load_mapping
+        from hacienda_shield_server import save_mapping, load_mapping
 
         mapping = {"<PERSON_1>": "John Smith", "<ORG_1>": "Acme Corp."}
         session_id = f"test_{int(time.time() * 1000)}"
@@ -21,14 +21,14 @@ class TestMappingPersistence:
 
     def test_load_nonexistent(self):
         """Loading a non-existent session returns empty dict."""
-        from pii_shield_server import load_mapping
+        from hacienda_shield_server import load_mapping
 
         loaded = load_mapping("nonexistent_session_12345")
         assert loaded == {}
 
     def test_mapping_from_anonymize(self, engine):
         """anonymize_text creates a valid mapping."""
-        from pii_shield_server import load_mapping
+        from hacienda_shield_server import load_mapping
 
         result = engine.anonymize_text("John Smith works at Acme Corp.")
         mapping = load_mapping(result["session_id"])
@@ -45,7 +45,7 @@ class TestMappingPersistence:
 class TestReviewData:
     def test_review_stored_after_anonymize(self, engine):
         """Review data is created after anonymization."""
-        from pii_shield_server import _get_review
+        from hacienda_shield_server import _get_review
 
         result = engine.anonymize_text("John Smith from London.")
         review = _get_review(result["session_id"])
@@ -57,7 +57,7 @@ class TestReviewData:
 
     def test_review_contains_entities(self, engine):
         """Review data includes detected entities with positions."""
-        from pii_shield_server import _get_review
+        from hacienda_shield_server import _get_review
 
         text = "Contact John Smith at john@example.com."
         result = engine.anonymize_text(text)

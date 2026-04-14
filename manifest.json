@@ -1,7 +1,7 @@
 {
   "dxt_version": "0.3",
-  "name": "pii-shield",
-  "display_name": "PII Shield",
+  "name": "hacienda-shield",
+  "display_name": "Hacienda Shield",
   "version": "1.0.0",
   "description": "Anonymize PII in documents. GLiNER zero-shot NER for high-quality entity recognition in legal documents.",
   "long_description": "MCP server that anonymizes documents before Claude sees them and restores real data after analysis. PII never enters the API — only file paths and session IDs are exchanged. Uses GLiNER zero-shot NER for high-quality entity recognition in legal documents, with Human-in-the-Loop review via local web UI. Supports PDF, DOCX (with tracked changes), and plain text. Includes 17 EU pattern recognizers, entity deduplication, chunked processing for large documents, and full local audit logging.",
@@ -11,11 +11,11 @@
   },
   "server": {
     "type": "python",
-    "entry_point": "server/pii_shield_server.py",
+    "entry_point": "server/hacienda_shield_server.py",
     "mcp_config": {
       "command": "python",
       "args": [
-        "${__dirname}/server/pii_shield_server.py"
+        "${__dirname}/server/hacienda_shield_server.py"
       ],
       "env": {
         "PII_MIN_SCORE": "${user_config.pii_min_score}",

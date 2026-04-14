@@ -40,7 +40,7 @@ class TestAnonymizeText:
         anon = result["anonymized_text"]
 
         # Load mapping and reverse
-        from pii_shield_server import load_mapping
+        from hacienda_shield_server import load_mapping
         mapping = load_mapping(result["session_id"])
 
         restored = anon
@@ -91,7 +91,7 @@ class TestEntityOverrides:
         result1 = engine.anonymize_text(text)
 
         # Find the index of the LOCATION entity to remove
-        from pii_shield_server import _get_review
+        from hacienda_shield_server import _get_review
         review = _get_review(result1["session_id"])
         location_indices = [i for i, e in enumerate(review["entities"])
                            if e["type"] == "LOCATION" and e.get("verified", False)]
